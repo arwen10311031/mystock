@@ -422,6 +422,8 @@
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
           <button class="btn" id="fetchPricesLive">⚡ 即時最新</button>
           <button class="btn ghost" id="fetchPrices">🔄 昨日收盤</button>
+          <button class="btn" id="fetchPricesGASLive" title="透過你的 Apps Script 抓即時成交價，最穩">⚡ GAS 即時</button>
+          <button class="btn ghost" id="fetchPricesGAS" title="透過你的 Apps Script 抓昨日收盤">🔄 GAS 昨收</button>
           <button class="btn ghost" id="fetchPricesOpenAPI" title="走 TWSE 官方 API（不靠 CORS proxy）">📡 官方 API</button>
           <button class="btn ghost" id="pastePricesBtn" title="從剪貼簿貼上本機 fetch_prices.py 輸出的 JSON">📋 貼上 JSON</button>
           <button class="btn ghost" id="resetPrices">回復為 Excel 預設值</button>
@@ -429,7 +431,7 @@
           <span class="small" id="priceCount"></span> <span class="small" id="priceUpdateInfo"></span>
         </div>
         <div class="small" id="fetchStatus" style="margin-bottom:10px;min-height:18px"></div>
-        <p class="small">抓取方式（從穩定到不穩）：<b>📡 官方 API</b>（TWSE OpenAPI 收盤資料，不需 proxy）→ <b>📋 貼上 JSON</b>（先在本機跑 fetch_prices.py copy 輸出）→ ⚡ / 🔄（走 CORS proxy）：<br>
+        <p class="small">抓取方式（從穩到不穩）：<b>⚡/🔄 GAS</b>（你的 Apps Script 直連 TWSE，最穩）→ <b>📡 官方 API</b>（TWSE OpenAPI 收盤）→ <b>📋 貼上 JSON</b>（本機 fetch_prices.py）→ ⚡/🔄 即時/昨收（走公開 CORS proxy，可能掛）：<br>
           <b>⚡ 即時最新</b>：交易時段內為當下成交價；非交易時段則為當天 (或最近一個交易日) 收盤價。<br>
           <b>🔄 昨日收盤</b>：永遠抓前一個交易日的收盤價。<br>
           抓不到時會自動換下一個 proxy；都失敗就手動填、或執行同層的 <code>fetch_prices.py</code>。</p>
@@ -450,9 +452,14 @@
         <div style="display:flex;gap:8px;align-items:center">
           <button class="btn" id="saveSheetsUrl">儲存並載入</button>
           <button class="btn ghost" id="reloadSheets">重新從 Sheets 載入</button>
+          <button class="btn ghost" id="copyShareLink">🔖 複製設定連結</button>
           <span class="small" id="sheetsUrlMsg"></span>
         </div>
-        <p class="small" style="margin-top:8px">設定後每次打開網站會從 Google Sheets 取最新資料；留空則用本機 data.js（離線備援）。</p>
+        <p class="small" style="margin-top:8px">
+          設定後每次打開網站會從 Google Sheets 取最新資料；留空則用本機 data.js（離線備援）。<br>
+          <b>🔖 複製設定連結</b>：產生帶 URL 的網址，書籤後新裝置開啟自動帶入 URL，免去手動複製貼上。<br>
+          <span class="sub">註：URL 在網址 # 之後，不會送到伺服器，僅在本機處理。</span>
+        </p>
       </div>
       <div class="panel">
         <h3>登入密碼</h3>

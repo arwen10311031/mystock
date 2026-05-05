@@ -401,7 +401,7 @@ function renderDashboard(){
   $('#kpi-cost-sub').textContent = `共 ${Object.values(map).filter(a=>a.units>0).length} 檔持股`;
   $('#kpi-value-sub').textContent = (value>cost?'+':'') + fmt(value-cost) + ' vs 成本';
   if (STATE.priceMeta && STATE.priceMeta.updatedAt){
-    $('#priceMeta').textContent = `📊 報價 ${STATE.priceMeta.updatedAt} (${STATE.priceMeta.source==='twse-live'?'TWSE 即時':(STATE.priceMeta.source==='twse-yest'?'TWSE 昨收':(STATE.priceMeta.source==='twse'?'TWSE':(STATE.priceMeta.source||'手動')))})`;
+    $('#priceMeta').textContent = `📊 報價 ${STATE.priceMeta.updatedAt} (${({'twse-live':'TWSE 即時','twse-yest':'TWSE 昨收','twse':'TWSE','gas-live':'GAS 即時','gas-yest':'GAS 昨收','gas':'GAS','twse-openapi':'TWSE OpenAPI','paste':'剪貼簿','manual':'手動'})[STATE.priceMeta.source] || STATE.priceMeta.source || '手動'})`;
   } else {
     $('#priceMeta').textContent = '📊 報價：使用 Excel 預設值';
   }
@@ -987,6 +987,8 @@ function renderPrices(){
   $('#fetchPrices').onclick = () => fetchTwsePrices('yesterday'); $('#fetchPricesLive').onclick = () => fetchTwsePrices('live');
   if ($('#fetchPricesOpenAPI')) $('#fetchPricesOpenAPI').onclick = fetchTwseOpenAPI;
   if ($('#pastePricesBtn')) $('#pastePricesBtn').onclick = pastePricesJson;
+  if ($('#fetchPricesGASLive')) $('#fetchPricesGASLive').onclick = () => fetchPricesViaGAS('live');
+  if ($('#fetchPricesGAS')) $('#fetchPricesGAS').onclick = () => fetchPricesViaGAS('yesterday');
   if (STATE.priceMeta && STATE.priceMeta.updatedAt){
     $('#priceUpdateInfo').textContent = `上次更新：${STATE.priceMeta.updatedAt}（${STATE.priceMeta.source && STATE.priceMeta.source.startsWith('twse')?'自動抓取':'手動輸入'}）`;
   } else {
@@ -1070,6 +1072,51 @@ async function pastePricesJson(){
     renderPrices(); renderAll();
   } catch(e){
     status.innerHTML = `<span class="red">貼上失敗：${e.message}</span> 請先在本機執行 <code>fetch_prices.py</code>，把輸出的 JSON 內容複製後再點此按鈕`;
+  }
+}
+
+
+// 透過 Google Apps Script 抓股價（不靠 CORS proxy，最穩）
+async function fetchPricesViaGAS(mode){
+  if (!STATE.sheetsUrl){ alert('請先到「設定」貼上 Apps Script URL'); return; }
+  const btn = mode==='live' ? $('#fetchPricesGASLive') : $('#fetchPricesGAS');
+  if (!btn) return;
+  btn.disabled = true;
+  const orig = btn.textContent;
+  btn.textContent = '抓取中…';
+  const status = $('#fetchStatus');
+  status.textContent = '走 Apps Script 抓 TWSE…';
+
+  const codes = heldCodes();
+  if (codes.length === 0){
+    status.innerHTML = '<span class="sub">目前沒有持股</span>';
+    btn.disabled = false; btn.textContent = orig;
+    return;
+  }
+
+  const url = STATE.sheetsUrl + '?action=prices&codes=' + codes.join(',') + '&mode=' + (mode||'auto');
+  try {
+    const r = await fetch(url, {cache:'no-store'});
+    if (!r.ok) throw new Error('HTTP '+r.status);
+    const json = await r.json();
+    if (json.error) throw new Error(json.error);
+
+    const got = Object.keys(json.prices || {}).length;
+    if (got === 0){
+      status.innerHTML = `<span class="red">GAS 抓到 0 檔</span>　錯誤：${(json.errors||[]).join(' / ') || '未知'}`;
+      btn.disabled = false; btn.textContent = orig;
+      return;
+    }
+    Object.assign(STATE.prices, json.prices);
+    const dateStr = json.price_date || new Date().toISOString().slice(0,10);
+    savePrices({updatedAt: dateStr + ' ' + new Date().toTimeString().slice(0,5), source: mode==='live'?'gas-live':(mode==='yesterday'?'gas-yest':'gas')});
+    status.innerHTML = `<span class="green">✔ GAS 抓到 ${got}/${json.total} 檔 (報價日 ${dateStr})</span>${json.missing && json.missing.length?` 缺：${json.missing.join(', ')}`:''}`;
+    renderPrices();
+    renderAll();
+  } catch(e){
+    status.innerHTML = `<span class="red">GAS 抓取失敗：${e.message}</span>　請確認 Apps Script 已部署最新版且設「任何人」可存取`;
+  } finally {
+    btn.disabled = false; btn.textContent = orig;
   }
 }
 
@@ -1534,6 +1581,18 @@ function renderSettings(){
         $('#sheetsUrlMsg').textContent = '已清除';
       }
     };
+    $('#copyShareLink').onclick = async () => {
+      if (!STATE.sheetsUrl){ alert('請先填好 URL 並按「儲存並載入」'); return; }
+      const baseUrl = window.location.origin + window.location.pathname;
+      const shareUrl = baseUrl + '#sheets=' + encodeURIComponent(STATE.sheetsUrl);
+      try {
+        await navigator.clipboard.writeText(shareUrl);
+        $('#sheetsUrlMsg').textContent = '✔ 已複製可分享連結到剪貼簿，到別的裝置貼上開啟即可自動帶入 URL';
+        $('#sheetsUrlMsg').className = 'small green';
+      } catch(e){
+        prompt('手動複製這串網址：', shareUrl);
+      }
+    };
     $('#reloadSheets').onclick = async () => {
       $('#sheetsUrlMsg').textContent = '重新載入中…';
       const ok = await loadFromSheets();
@@ -1629,6 +1688,16 @@ function renderAll(){
 
 async function initApp(){
   loadLocal();
+  // 從網址 hash 取得 sheets URL（# 後面的 sheets=... 不會送到 server，安全）
+  const m = (window.location.hash || '').match(/sheets=([^&]+)/);
+  if (m){
+    const urlFromHash = decodeURIComponent(m[1]);
+    if (urlFromHash && urlFromHash !== STATE.sheetsUrl){
+      STATE.sheetsUrl = urlFromHash;
+      localStorage.setItem('mystock.sheetsUrl', urlFromHash);
+      console.log('已從網址自動載入 Sheets URL');
+    }
+  }
   if (STATE.sheetsUrl){
     const ok = await loadFromSheets();
     if (ok) console.log('已從 Google Sheets 載入');
