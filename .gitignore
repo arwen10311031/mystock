@@ -1,0 +1,14 @@
+# 個人資料 - 絕對不要 commit
+data.js.backup
+*.xlsx
+prices.json
+mystock-settings.json
+
+# 系統 / 編輯器
+.DS_Store
+Thumbs.db
+__pycache__/
+*.pyc
+*.log
+.vscode/
+.idea/

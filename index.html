@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>個人投資紀錄</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
+<style>
+  :root{
+    --bg:#0f1419; --panel:#1a2029; --panel-2:#222a36; --line:#2a3340;
+    --text:#e6edf3; --sub:#8b96a5; --accent:#4f8cff; --accent-2:#7cb1ff;
+    --green:#3ddc84; --red:#ff6b6b; --yellow:#ffc857;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif;font-size:14px}
+  a{color:var(--accent-2)}
+  button{cursor:pointer;font:inherit}
+  input,select{font:inherit}
+  /* Login */
+  #login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0a1422,#15233a);z-index:100}
+  #login .box{background:var(--panel);padding:36px 40px;border-radius:12px;width:340px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+  #login h1{margin:0 0 8px;font-size:22px}
+  #login p{color:var(--sub);margin:0 0 18px;font-size:13px}
+  #login input{width:100%;padding:11px 14px;border-radius:8px;border:1px solid var(--line);background:#0e1620;color:var(--text);outline:none;font-size:15px}
+  #login input:focus{border-color:var(--accent)}
+  #login button{margin-top:12px;width:100%;padding:11px;border-radius:8px;border:0;background:var(--accent);color:#fff;font-weight:600;font-size:15px}
+  #login .err{color:var(--red);font-size:12px;margin-top:8px;min-height:16px}
+  #login .hint{color:var(--sub);font-size:11px;margin-top:14px;text-align:center}
+  /* App */
+  #app{display:none}
+  header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--line);background:var(--panel)}
+  header h1{margin:0;font-size:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+  header .who-filter{display:flex;gap:6px}
+  header .who-filter button{padding:6px 14px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--sub);font-size:13px}
+  header .who-filter button.active{background:var(--accent);border-color:var(--accent);color:#fff}
+  header .actions{display:flex;gap:8px;align-items:center}
+  header .actions button{padding:7px 12px;border-radius:6px;border:1px solid var(--line);background:transparent;color:var(--text);font-size:13px}
+  nav{display:flex;border-bottom:1px solid var(--line);background:var(--panel);padding:0 24px;overflow-x:auto}
+  nav button{padding:12px 16px;border:0;background:transparent;color:var(--sub);font-size:14px;border-bottom:2px solid transparent;white-space:nowrap}
+  nav button.active{color:var(--text);border-bottom-color:var(--accent)}
+  main{padding:20px 24px 80px;max-width:1400px;margin:0 auto}
+  .grid{display:grid;gap:14px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px}
+  .card .label{color:var(--sub);font-size:12px;letter-spacing:.5px;margin-bottom:6px}
+  .card .value{font-size:22px;font-weight:600}
+  .card .delta{font-size:12px;margin-top:4px}
+  .green{color:var(--green)} .red{color:var(--red)} .sub{color:var(--sub)}
+  .panel{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;margin-top:16px}
+  .panel h3{margin:0 0 12px;font-size:14px;color:var(--sub);font-weight:500;letter-spacing:.5px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  table thead th{color:var(--sub);font-weight:500;padding:10px 8px;text-align:left;border-bottom:1px solid var(--line);font-size:12px;background:var(--panel-2);position:sticky;top:0;z-index:1}
+  table tbody td{padding:9px 8px;border-bottom:1px solid var(--line)}
+  table tbody tr:hover{background:rgba(255,255,255,.03)}
+  table tfoot td{position:sticky;bottom:0;background:var(--panel-2);border-top:2px solid var(--line);z-index:1}
+  table .num{text-align:right;font-variant-numeric:tabular-nums}
+  .scroll{max-height:520px;overflow:auto;border:1px solid var(--line);border-radius:8px}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;background:#2a3340;color:var(--sub)}
+  .pill.realized{background:#3a2a3a;color:#e7a8e7}
+  .pill.held{background:#2a3a3a;color:#a8e7d7}
+  .form-row{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px}
+  .form-row label{color:var(--sub);min-width:100px}
+  .form-row input,.form-row select{padding:7px 10px;background:#0e1620;border:1px solid var(--line);color:var(--text);border-radius:6px;width:140px}
+  .form-row input[type="date"]{width:170px;color-scheme:dark}
+  .price-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:10px}
+  .price-grid .row{display:flex;align-items:center;gap:8px;background:var(--panel-2);padding:8px 10px;border-radius:6px}
+  .price-grid .row .name{flex:1;font-size:13px}
+  .price-grid .row .code{color:var(--sub);font-size:11px}
+  .price-grid .row input{width:90px;text-align:right;padding:6px 8px;background:#0e1620;border:1px solid var(--line);color:var(--text);border-radius:6px}
+  .btn{padding:8px 14px;border-radius:6px;border:0;background:var(--accent);color:#fff;font-weight:500;font-size:13px}
+  .btn.ghost{background:transparent;border:1px solid var(--line);color:var(--text)}
+  .btn.warn{background:#5c2a2a;color:#ffb3b3}
+  .iconbtn{background:transparent;border:1px solid var(--line);color:var(--sub);padding:3px 8px;border-radius:4px;font-size:12px}
+  .iconbtn:hover{color:var(--text);border-color:var(--accent)}
+  .inline-date{background:transparent;border:1px solid transparent;color:var(--text);font:inherit;font-size:13px;padding:2px 4px;border-radius:4px;color-scheme:dark;width:130px}
+  .inline-date:hover{border-color:var(--line);background:#0e1620}
+  .inline-date:focus{border-color:var(--accent);background:#0e1620;outline:none}
+  .inline-date.sub{color:var(--sub)}
+  tr.month-band td{background:rgba(124,177,255,.05)}
+  tr.month-band:hover td{background:rgba(124,177,255,.09)}
+  .flash-saved td{animation:flashSaved 1s ease-out}
+  @keyframes flashSaved{0%{background:rgba(61,220,132,.25)}100%{background:transparent}}
+  .chart-wrap{position:relative;height:300px}
+  .holdings-layout{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
+  .holdings-legend{flex:1 1 320px;min-width:280px;display:grid;gap:4px;font-size:13px;max-height:300px;overflow:auto;padding-right:6px}
+  .legend-item{display:grid;grid-template-columns:14px minmax(0,1fr) 56px 72px 50px;gap:8px;align-items:center;padding:5px 8px;border-radius:5px}
+  .legend-item:hover{background:rgba(255,255,255,.04)}
+  .legend-dot{width:12px;height:12px;border-radius:3px;display:inline-block}
+  .legend-name{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .legend-code{color:var(--sub);font-size:11px;margin-left:4px}
+  .legend-lots{color:var(--accent-2);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right}
+  .legend-odd{color:var(--accent-2);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;text-align:left;opacity:.85}
+  .legend-pct{color:var(--sub);font-variant-numeric:tabular-nums;font-size:12px;text-align:right}
+  .tag{font-size:11px;padding:2px 6px;border-radius:4px;background:var(--panel-2);color:var(--sub);margin-left:6px}
+  .filter-bar{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
+  .filter-bar select,.filter-bar input{padding:7px 10px;background:#0e1620;border:1px solid var(--line);color:var(--text);border-radius:6px}
+  .badge{display:inline-block;padding:1px 6px;border-radius:3px;font-size:10px;background:var(--panel-2);color:var(--sub);margin-left:6px}
+  .badge.etf{background:#1d3a4d;color:#7cd1ff}
+  .badge.stock{background:#3a3a1d;color:#e3d77a}
+  .small{font-size:11px;color:var(--sub)}
+  details{background:var(--panel-2);padding:10px 14px;border-radius:6px;margin-top:10px}
+  details summary{cursor:pointer;color:var(--sub);font-size:13px}
+  hr{border:0;border-top:1px solid var(--line);margin:14px 0}
+  .footer{position:fixed;bottom:0;left:0;right:0;background:var(--panel);border-top:1px solid var(--line);padding:6px 24px;font-size:11px;color:var(--sub);display:flex;justify-content:space-between}
+  .form-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px}
+  .form-card{background:var(--panel-2);border:1px solid var(--line);border-radius:8px;padding:14px}
+  .form-card h4{margin:0 0 12px;color:var(--text);font-size:14px}
+  .form-card .calc{margin-top:8px;padding:8px;background:#0e1620;border-radius:6px;font-size:12px;color:var(--sub)}
+  .form-card .calc b{color:var(--text)}
+  ::-webkit-scrollbar{width:10px;height:10px}
+  ::-webkit-scrollbar-track{background:transparent}
+  ::-webkit-scrollbar-thumb{background:#2a3340;border-radius:5px}
+  ::-webkit-scrollbar-thumb:hover{background:#3a4350}
+</style>
+</head>
+<body>
+
+<!-- Login Screen -->
+<div id="login">
+  <div class="box">
+    <h1>個人投資紀錄</h1>
+    <p>請輸入密碼進入</p>
+    <input id="pw" type="password" placeholder="密碼" autocomplete="current-password" />
+    <button id="loginBtn">登入</button>
+    <div class="err" id="loginErr"></div>
+    <div class="hint">v1 預設密碼：<code>mystock2026</code>，登入後可在「設定」修改</div>
+  </div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <header>
+    <h1>📈 個人投資紀錄 <span class="tag" id="updated"></span> <span class="tag" id="priceMeta"></span></h1>
+    <div class="who-filter" id="whoFilter">
+      <button data-who="all" class="active">合併</button>
+      <button data-who="我">我</button>
+      <button data-who="Max">Max</button>
+    </div>
+    <div class="actions">
+      <button id="logoutBtn">登出</button>
+    </div>
+  </header>
+
+  <nav id="nav">
+    <button data-tab="dash" class="active">總覽</button>
+    <button data-tab="holdings">持股明細</button>
+    <button data-tab="trades">交易紀錄</button>
+    <button data-tab="dividends">配息紀錄</button>
+    <button data-tab="monthly">每月配息</button>
+    <button data-tab="add">➕ 新增</button>
+    <button data-tab="annual">📅 年度預估</button>
+    <button data-tab="prices">股價更新</button>
+    <button data-tab="settings">設定</button>
+  </nav>
+
+  <main>
+    <!-- Dashboard -->
+    <section id="tab-dash">
+      <div class="grid cards">
+        <div class="card"><div class="label">總投資成本</div><div class="value" id="kpi-cost">-</div><div class="delta sub" id="kpi-cost-sub"></div></div>
+        <div class="card"><div class="label">目前現值</div><div class="value" id="kpi-value">-</div><div class="delta sub" id="kpi-value-sub"></div></div>
+        <div class="card"><div class="label">未實現損益</div><div class="value" id="kpi-unreal">-</div><div class="delta" id="kpi-unreal-sub"></div></div>
+        <div class="card"><div class="label">已實現損益</div><div class="value" id="kpi-real">-</div><div class="delta" id="kpi-real-sub"></div></div>
+        <div class="card"><div class="label">已收配息</div><div class="value" id="kpi-div">-</div><div class="delta sub" id="kpi-div-sub"></div></div>
+        <div class="card"><div class="label">總報酬 (含配息)</div><div class="value" id="kpi-total">-</div><div class="delta" id="kpi-total-sub"></div></div>
+      </div>
+
+      <div class="panel">
+        <h3>持股組成（依現值）</h3>
+        <div class="holdings-layout">
+          <div class="chart-wrap" style="flex:1 1 320px;min-width:280px"><canvas id="chartHoldings"></canvas></div>
+          <div id="holdingsLegend" class="holdings-legend"></div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>每月配息（含預估）</h3>
+        <div class="chart-wrap"><canvas id="chartMonthly"></canvas></div>
+      </div>
+    </section>
+
+    <!-- Holdings -->
+    <section id="tab-holdings" hidden>
+      <div class="filter-bar">
+        <select id="holdingsWho">
+          <option value="">依頂端切換</option>
+          <option value="all">合併</option>
+          <option value="我">只看 我</option>
+          <option value="Max">只看 Max</option>
+        </select>
+        <span class="small">點欄位 header 切換排序　·　取消勾選「隱藏無持股」可看已賣光的股票　·　<b style="color:var(--accent-2)">總計列的「已收配息／已實現／含息／不含息」永遠包含已賣光的股票</b>（與「總覽」KPI 一致）</span>
+        <span style="flex:1"></span>
+        <label class="small"><input type="checkbox" id="hideEmpty" checked /> 隱藏無持股</label>
+      </div>
+      <div class="scroll">
+        <table id="tblHoldings">
+          <thead>
+            <tr>
+              <th>股票</th><th>代碼</th><th class="num">持股</th><th class="num" title="累計配股股數（含 Excel + 自建）">配股</th><th class="num">買進均價</th>
+              <th class="num">總成本</th><th class="num">現價</th><th class="num">市值</th>
+              <th class="num">未實現損益</th><th class="num">未實現%</th>
+              <th class="num">已收配息</th><th class="num" title="已收配息 / 總成本">配息率%</th><th class="num">已實現損益</th>
+              <th class="num" title="未實現 + 已實現（不含配息）">不含息損益</th><th class="num" title="不含息損益 / 總成本">不含息%</th>
+              <th class="num" title="未實現 + 已實現 + 已收配息">含息總損益</th><th class="num" title="含息總損益 / 總成本">含息報酬%</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+          <tfoot></tfoot>
+        </table>
+      </div>
+    </section>
+
+    <!-- Trades -->
+    <section id="tab-trades" hidden>
+      <div class="filter-bar">
+        <select id="tradeStock"><option value="">全部股票</option></select>
+        <select id="tradeStatus">
+          <option value="">全部狀態</option>
+          <option value="held">持有中</option>
+          <option value="realized">已賣出</option>
+        </select>
+        <span class="small">點欄位 header 可切換排序</span>
+        <span style="flex:1"></span>
+        <span class="small" id="tradeCount"></span>
+      </div>
+      <div class="scroll">
+        <table id="tblTrades">
+          <thead>
+            <tr>
+              <th>狀態</th><th>股票</th><th>買進日</th>
+              <th class="num">買價</th><th class="num">股數</th><th class="num">買進成本</th>
+              <th>賣出日</th><th class="num">賣價</th><th class="num">賣出淨收</th>
+              <th class="num">損益</th><th class="num">報酬率</th><th class="num">年化</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+      <details>
+        <summary>計算方式（買進手續費、賣出手續費 + 證交稅）</summary>
+        <div class="small" style="margin-top:8px">
+          手續費＝成交金額 × <code id="feeRateDisplay">0.1425%</code>（買賣雙方）<br>
+          證交稅：股票 0.3%、ETF 0.1%（賣方）<br>
+          手續費最低 20 元<br>
+          已賣出：報酬率 = (賣出淨收 − 買進成本) / 買進成本；年化 = (1+r)^(365/天數) − 1<br>
+          未賣出：報酬率以目前現價估算
+        </div>
+      </details>
+    </section>
+
+    <!-- Dividends -->
+    <section id="tab-dividends" hidden>
+      <div class="filter-bar">
+        <select id="divStock"><option value="">全部股票</option></select>
+        <select id="divYear"><option value="">全部年份</option></select>
+        <select id="divKind">
+          <option value="">全部</option>
+          <option value="actual">已發放</option>
+          <option value="forecast">預估</option>
+        </select>
+        <span style="flex:1"></span>
+        <span class="small" id="divSummary"></span>
+      </div>
+      <div class="scroll">
+        <table id="tblDiv">
+          <thead><tr><th>類型</th><th>除息日</th><th>入帳日</th><th>股票</th><th class="num">每股配息</th><th class="num">配息金額</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Monthly -->
+    <section id="tab-monthly" hidden>
+      <div class="grid cards">
+        <div class="card"><div class="label">歷年累計配息（已收）</div><div class="value green" id="kpi-mon-received">-</div></div>
+        <div class="card"><div class="label">未來預估配息</div><div class="value" style="color:var(--yellow)" id="kpi-mon-forecast">-</div></div>
+        <div class="card"><div class="label">合計（已收 + 預估）</div><div class="value" id="kpi-mon-total">-</div></div>
+        <div class="card"><div class="label">每月平均（實際發放月）</div><div class="value" id="kpi-mon-avg">-</div></div>
+      </div>
+      <div class="panel">
+        <h3>每月配息收入</h3>
+        <div class="chart-wrap" style="height:340px"><canvas id="chartMonthly2"></canvas></div>
+      </div>
+      <div class="panel">
+        <h3>年度匯總</h3>
+        <div class="scroll">
+          <table id="tblYearly">
+            <thead><tr><th>年份</th><th class="num">已收配息</th><th class="num">預估配息</th><th class="num">合計</th><th class="num">每月平均</th><th class="num">累計已收</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+      <div class="panel">
+        <h3>各月明細</h3>
+        <div class="scroll">
+          <table id="tblMonthly">
+            <thead><tr><th>年月</th><th class="num">已收</th><th class="num">預估</th><th class="num">合計</th><th class="num">累計已收</th><th>主要來源</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Add -->
+    <section id="tab-add" hidden>
+      <div class="form-grid">
+        <!-- 買進 -->
+        <div class="form-card">
+          <h4>📥 新增買進</h4>
+          <div class="form-row"><label>帳戶</label>
+            <select id="buyWho"><option value="我">我</option><option value="Max">Max</option></select>
+          </div>
+          <div class="form-row"><label>日期</label><input type="date" id="buyDate"></div>
+          <div class="form-row"><label>股票</label><select id="buyStock" style="width:auto;flex:1"></select></div>
+          <div class="form-row"><label>買價</label><input type="number" id="buyPrice" step="0.01" placeholder="例：18.50"></div>
+          <div class="form-row"><label>股數</label><input type="number" id="buyUnits" step="1" placeholder="例：1000"></div>
+          <div class="calc">成交金額 <b id="buyAmount">-</b>　手續費 <b id="buyFee">-</b><br>買進成本 <b id="buyTotal">-</b></div>
+          <div id="buyRef" style="margin-top:10px;padding:10px;background:#0e1620;border-radius:6px;border:1px dashed var(--line)"></div>
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+            <button class="btn" id="submitBuy">儲存買進</button>
+            <span class="small" id="buyMsg"></span>
+          </div>
+        </div>
+
+        <!-- 賣出 -->
+        <div class="form-card">
+          <h4>📤 新增賣出（標記已持有的批次為賣出）</h4>
+          <div class="form-row"><label>股票</label><select id="sellStock" style="width:auto;flex:1"></select></div>
+          <div class="form-row"><label>買進批次</label><select id="sellLot" style="width:auto;flex:1"></select></div>
+          <div class="form-row"><label>賣出日期</label><input type="date" id="sellDate"></div>
+          <div class="form-row"><label>賣價</label><input type="number" id="sellPrice" step="0.01"></div>
+          <div class="calc">手續費 0.1425% + 證交稅（股票 0.3% / ETF 0.1%）會自動計入。<br>每次只能標記整批；如果只賣部分，<span class="sub">先在 Excel 拆成兩列再 rebuild_data</span>。</div>
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+            <button class="btn" id="submitSell">儲存賣出</button>
+            <span class="small" id="sellMsg"></span>
+          </div>
+        </div>
+
+        <!-- 配息 -->
+        <div class="form-card">
+          <h4>💰 新增配息</h4>
+          <div class="form-row"><label>除息日</label><input type="date" id="divExDateNew"><span class="small">用於推估參與除息持股</span></div>
+          <div class="form-row"><label>入帳日</label><input type="date" id="divDateNew"><span class="small">自動 = 除息日 + 30 天，可手動調；用於月配息統計</span></div>
+          <div class="form-row"><label>股票</label><select id="divStockNew" style="width:auto;flex:1"></select></div>
+          <div class="form-row"><label>每股配息</label><input type="number" id="divPerShare" step="0.001"></div>
+          <div class="form-row"><label>配息金額</label><input type="number" id="divUnitsCalc" step="1"><span class="small">自動算（依除息日當下持股），可手動覆蓋</span></div>
+          <div class="calc">除息日當下持股 <b id="divHolding">-</b>　預計入帳 <b id="divAmount">-</b></div>
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+            <button class="btn" id="submitDiv">儲存配息</button>
+            <span class="small" id="divMsg"></span>
+          </div>
+        </div>
+
+        <!-- 配股 -->
+        <div class="form-card">
+          <h4>📦 新增配股</h4>
+          <div class="form-row"><label>除權日</label><input type="date" id="sdExDateNew"><span class="small">用於推算當下持股</span></div>
+          <div class="form-row"><label>入帳日</label><input type="date" id="sdDateNew"><span class="small">自動 = 除權日 + 30 天</span></div>
+          <div class="form-row"><label>股票</label><select id="sdStockNew" style="width:auto;flex:1"></select></div>
+          <div class="form-row"><label>配股率 (元)</label><input type="number" id="sdPerShare" step="0.001" placeholder="例：0.1"><span class="small">面額 10 元計：0.1 元 = 1張配 10股；1 元 = 1張配 100股</span></div>
+          <div class="form-row"><label>配股股數</label><input type="number" id="sdUnits" step="1" placeholder="自動算"><span class="small">自動 = 持股 × 配股率 ÷ 10，可手動覆蓋</span></div>
+          <div class="calc">除權日當下持股 <b id="sdHolding">-</b>　預計配股 <b id="sdAmount">-</b>　<span class="small">配股不會增加成本，只增加持股股數（含零股）</span></div>
+          <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
+            <button class="btn" id="submitSd">儲存配股</button>
+            <span class="small" id="sdMsg"></span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <h3>已自建紀錄（在這裡可以刪除）</h3>
+        <div class="scroll" style="max-height:300px">
+          <table>
+            <thead><tr><th>類型</th><th>日期</th><th>內容</th><th></th></tr></thead>
+            <tbody id="userListBody"></tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Annual Forecast -->
+    <section id="tab-annual" hidden>
+      <div class="filter-bar">
+        <label class="small">年份</label>
+        <select id="annualYear"><option>—</option></select>
+        <span class="small">已收 = 入帳日 ≤ 今日；預估 = 入帳日在未來，自動依除息日當下持股 × 每股配息推估</span>
+      </div>
+      <div class="grid cards">
+        <div class="card"><div class="label">年度</div><div class="value" id="kpiAnYear">-</div></div>
+        <div class="card"><div class="label">已收到 (YTD)</div><div class="value green" id="kpiAnReceived">-</div></div>
+        <div class="card"><div class="label">預估剩餘</div><div class="value" style="color:var(--yellow)" id="kpiAnForecast">-</div></div>
+        <div class="card"><div class="label">全年合計</div><div class="value" id="kpiAnTotal">-</div></div>
+        <div class="card"><div class="label">對成本殖利率</div><div class="value" id="kpiAnYield">-</div></div>
+      </div>
+      <div class="panel">
+        <h3>各股票明細</h3>
+        <div class="scroll">
+          <table id="tblAnnual">
+            <thead><tr><th>股票</th><th class="num">目前持股</th><th class="num">總成本</th><th class="num">已收</th><th class="num">預估剩餘</th><th class="num">全年合計</th><th class="num">殖利率</th></tr></thead>
+            <tbody></tbody>
+            <tfoot></tfoot>
+          </table>
+        </div>
+      </div>
+      <details>
+        <summary>計算規則</summary>
+        <div class="small" style="margin-top:6px">
+          假設「持股不再變動」的情況下，今年會領到的配息：<br>
+          1. <b>入帳日 ≤ 今日</b> 的紀錄 → 用實際金額（已收）<br>
+          2. <b>入帳日 &gt; 今日</b> 的紀錄 → 用「除息日當下持股 × 每股配息」自動算（預估剩餘）<br>
+          3. 如果某筆預估金額你已經 ✏️ 鎖定（例如知道實際發放數），那筆就不再自動覆寫<br>
+          4. 殖利率 = 全年合計 / 對應股票的成本（成交價×股數）
+        </div>
+      </details>
+    </section>
+
+    <!-- Prices -->
+    <section id="tab-prices" hidden>
+      <div class="panel">
+        <h3>股價更新</h3>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+          <button class="btn" id="fetchPricesLive">⚡ 即時最新</button>
+          <button class="btn ghost" id="fetchPrices">🔄 昨日收盤</button>
+          <button class="btn ghost" id="fetchPricesOpenAPI" title="走 TWSE 官方 API（不靠 CORS proxy）">📡 官方 API</button>
+          <button class="btn ghost" id="pastePricesBtn" title="從剪貼簿貼上本機 fetch_prices.py 輸出的 JSON">📋 貼上 JSON</button>
+          <button class="btn ghost" id="resetPrices">回復為 Excel 預設值</button>
+          <span style="flex:1"></span>
+          <span class="small" id="priceCount"></span> <span class="small" id="priceUpdateInfo"></span>
+        </div>
+        <div class="small" id="fetchStatus" style="margin-bottom:10px;min-height:18px"></div>
+        <p class="small">抓取方式（從穩定到不穩）：<b>📡 官方 API</b>（TWSE OpenAPI 收盤資料，不需 proxy）→ <b>📋 貼上 JSON</b>（先在本機跑 fetch_prices.py copy 輸出）→ ⚡ / 🔄（走 CORS proxy）：<br>
+          <b>⚡ 即時最新</b>：交易時段內為當下成交價；非交易時段則為當天 (或最近一個交易日) 收盤價。<br>
+          <b>🔄 昨日收盤</b>：永遠抓前一個交易日的收盤價。<br>
+          抓不到時會自動換下一個 proxy；都失敗就手動填、或執行同層的 <code>fetch_prices.py</code>。</p>
+        <div class="price-grid" id="priceGrid"></div>
+        <hr>
+        <div style="display:flex;gap:8px">
+          <span style="flex:1"></span>
+          <button class="btn" id="recalc">重算所有報酬</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Settings -->
+    <section id="tab-settings" hidden>
+      <div class="panel">
+        <h3>Google Sheets 資料來源</h3>
+        <div class="form-row"><label>Apps Script URL</label><input id="sheetsUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec" style="width:auto;flex:1;min-width:300px"></div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <button class="btn" id="saveSheetsUrl">儲存並載入</button>
+          <button class="btn ghost" id="reloadSheets">重新從 Sheets 載入</button>
+          <span class="small" id="sheetsUrlMsg"></span>
+        </div>
+        <p class="small" style="margin-top:8px">設定後每次打開網站會從 Google Sheets 取最新資料；留空則用本機 data.js（離線備援）。</p>
+      </div>
+      <div class="panel">
+        <h3>登入密碼</h3>
+        <div class="form-row"><label>新密碼</label><input id="newPw" type="password" /></div>
+        <div class="form-row"><label>再輸入一次</label><input id="newPw2" type="password" /></div>
+        <button class="btn" id="changePw">變更密碼</button>
+        <span class="small" id="pwMsg"></span>
+      </div>
+      <div class="panel">
+        <h3>手續費設定</h3>
+        <div class="form-row"><label>手續費率 (%)</label><input id="feeRate" type="number" step="0.0001" /><span class="small">預設 0.1425%（一般券商；可自訂折扣後費率）</span></div>
+        <div class="form-row"><label>手續費下限</label><input id="feeMin" type="number" step="1" /><span class="small">預設 20 元</span></div>
+        <div class="form-row"><label>股票證交稅 (%)</label><input id="taxStock" type="number" step="0.001" /><span class="small">預設 0.3%</span></div>
+        <div class="form-row"><label>ETF 證交稅 (%)</label><input id="taxEtf" type="number" step="0.001" /><span class="small">預設 0.1%</span></div>
+        <button class="btn" id="saveFee">儲存</button>
+      </div>
+      <div class="panel">
+        <h3>資料備份 / 還原</h3>
+        <p class="small">瀏覽器中目前儲存的資料。建議定期匯出備份。</p>
+        <div style="display:flex;gap:8px;flex-wrap:wrap">
+          <button class="btn ghost" id="exportSettings">匯出設定 JSON</button>
+          <button class="btn ghost" id="importSettings">匯入設定 JSON</button>
+          <input type="file" id="importFile" accept="application/json" style="display:none">
+          <button class="btn warn" id="clearAll">清除所有本機資料</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <div class="footer">
+    <span>📁 本機檔，所有資料存在你的瀏覽器中</span>
+    <span id="footStat"></span>
+  </div>
+</div>
+
+<script src="data.js"></script>
+<script src="app.js"></script>
+</body>
+</html>
