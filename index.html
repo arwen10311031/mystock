@@ -11,10 +11,12 @@
     --text:#e6edf3; --sub:#8b96a5; --accent:#4f8cff; --accent-2:#7cb1ff;
     --green:#3ddc84; --red:#ff6b6b; --yellow:#ffc857;
   }
-  *{box-sizing:border-box}
-  html,body{max-width:100vw;overflow-x:hidden}
+  *{box-sizing:border-box;min-width:0}
+  html,body{width:100%;max-width:100%;overflow-x:hidden;position:relative}
   body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif;font-size:14px}
-  img,canvas,svg{max-width:100%}
+  #app,header,nav,main,section,.panel,.grid,.cards,.holdings-layout,.form-grid,.price-grid,.filter-bar{max-width:100%;min-width:0}
+  canvas{max-width:100% !important;height:auto !important}
+  img,svg{max-width:100%}
   a{color:var(--accent-2)}
   button{cursor:pointer;font:inherit}
   input,select{font:inherit}
@@ -72,9 +74,10 @@
   tr.month-band:hover td{background:rgba(124,177,255,.09)}
   .flash-saved td{animation:flashSaved 1s ease-out}
   @keyframes flashSaved{0%{background:rgba(61,220,132,.25)}100%{background:transparent}}
-  .chart-wrap{position:relative;height:300px}
+  .chart-wrap{position:relative;height:300px;min-width:0;width:100%}
+  .chart-pie{flex:1 1 320px;max-width:100%}
   .holdings-layout{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
-  .holdings-legend{flex:1 1 320px;min-width:280px;display:grid;gap:4px;font-size:13px;max-height:300px;overflow:auto;padding-right:6px}
+  .holdings-legend{flex:1 1 320px;min-width:0;max-width:100%;display:grid;gap:4px;font-size:13px;max-height:300px;overflow:auto;padding-right:6px}
   .legend-item{display:grid;grid-template-columns:14px minmax(0,1fr) 56px 72px 50px;gap:8px;align-items:center;padding:5px 8px;border-radius:5px}
   .legend-item:hover{background:rgba(255,255,255,.04)}
   .legend-dot{width:12px;height:12px;border-radius:3px;display:inline-block}
@@ -171,8 +174,12 @@
 
     /* 持股組成的圓餅 + legend 直立 */
     .holdings-layout{flex-direction:column;gap:10px;align-items:stretch}
-    .holdings-legend{max-height:none;flex:none}
+    .chart-wrap{flex:none !important;min-width:0 !important;width:100% !important}
+    .holdings-legend{max-height:none;flex:none;min-width:0 !important;width:100% !important}
     .legend-item{grid-template-columns:12px minmax(0,1fr) 50px 60px 44px;gap:6px;font-size:12px;padding:4px 6px}
+
+    /* 表格容器固定 100% 寬，內容才橫向 scroll */
+    .scroll{width:100%;overflow-x:auto}
 
     /* 股價更新格子：兩欄 */
     .price-grid{grid-template-columns:repeat(2,1fr);gap:8px}
@@ -248,7 +255,7 @@
       <div class="panel">
         <h3>持股組成（依現值）</h3>
         <div class="holdings-layout">
-          <div class="chart-wrap" style="flex:1 1 320px;min-width:280px"><canvas id="chartHoldings"></canvas></div>
+          <div class="chart-wrap chart-pie"><canvas id="chartHoldings"></canvas></div>
           <div id="holdingsLegend" class="holdings-legend"></div>
         </div>
       </div>
@@ -527,7 +534,7 @@
     <section id="tab-settings" hidden>
       <div class="panel">
         <h3>Google Sheets 資料來源</h3>
-        <div class="form-row"><label>Apps Script URL</label><input id="sheetsUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec" style="width:auto;flex:1;min-width:300px"></div>
+        <div class="form-row"><label>Apps Script URL</label><input id="sheetsUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec" style="width:auto;flex:1;min-width:0"></div>
         <div style="display:flex;gap:8px;align-items:center">
           <button class="btn" id="saveSheetsUrl">儲存並載入</button>
           <button class="btn ghost" id="reloadSheets">重新從 Sheets 載入</button>

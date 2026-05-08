@@ -67,13 +67,11 @@ const STATE = {
 
 // ---------- 載入設定 ----------
 function loadLocal(){
-  // 股價：不再 localStorage，每次開頁面都從 data.js 的 latest_prices 開始
-  // （之後使用者按 GAS 即時 / 昨收 等按鈕會更新到記憶體）
-  // 這樣不同裝置打開不會看到不同的快取股價
-  STATE.prices = {...(STATE.data.latest_prices || {})};
-  for (const c of Object.keys(STATE.data.code_to_name)) {
-    if (STATE.prices[c]==null) STATE.prices[c] = STATE.data.latest_prices?.[c] ?? null;
-  }
+  // 股價：完全不讀任何來源，初始為空
+  // - 不讀 localStorage
+  // - 不用 data.js 的 latest_prices 當 fallback（避免顯示過期數字）
+  // 由 initApp 開頁時自動抓一次最新股價填入；抓完前 KPI 會暫時顯示 -
+  STATE.prices = {};
   STATE.priceMeta = { updatedAt: '', source: '' };
   // 清掉舊的 localStorage（避免新版上線後還留著舊快取造成困惑）
   try { localStorage.removeItem('mystock.prices'); localStorage.removeItem('mystock.priceMeta'); } catch(e){}
@@ -108,16 +106,10 @@ async function loadFromSheets(){
     if (!r.ok) throw new Error('HTTP '+r.status);
     const json = await r.json();
     if (json.error) throw new Error(json.error);
-    // 保留原有的 latest_prices fallback（data.js 內建的）
-    json.latest_prices = STATE.data.latest_prices || {};
+    // 不再保留 data.js 的 latest_prices；股價由 GAS 即時抓
+    json.latest_prices = {};
     STATE.data = json;
     STATE.data.records.forEach((r,i) => { r._id = `xls-${i}`; });
-    // 重建 STATE.prices：以 fallback 為基礎，新代碼補上 null
-    const newPrices = {...(STATE.data.latest_prices || {})};
-    for (const c of Object.keys(STATE.data.code_to_name || {})){
-      if (newPrices[c] == null) newPrices[c] = null;
-    }
-    STATE.prices = newPrices;
     return true;
   } catch(e){
     console.warn('Sheets 載入失敗，使用 data.js:', e);
@@ -404,7 +396,7 @@ function renderDashboard(){
   if (STATE.priceMeta && STATE.priceMeta.updatedAt){
     $('#priceMeta').textContent = `📊 報價 ${STATE.priceMeta.updatedAt} (${({'twse-live':'TWSE 即時','twse-yest':'TWSE 昨收','twse':'TWSE','gas-live':'GAS 即時','gas-yest':'GAS 昨收','gas':'GAS','twse-openapi':'TWSE OpenAPI','paste':'剪貼簿','manual':'手動'})[STATE.priceMeta.source] || STATE.priceMeta.source || '手動'})`;
   } else {
-    $('#priceMeta').textContent = '📊 報價：使用 Excel 預設值';
+    $('#priceMeta').textContent = '📊 抓取股價中…';
   }
 
   drawHoldingsChart(map);
@@ -986,8 +978,8 @@ function renderPrices(){
     });
   });
   $('#resetPrices').onclick = () => {
-    if (!confirm('回復為 Excel 內最後一次的現值？')) return;
-    STATE.prices = {...STATE.data.latest_prices};
+    if (!confirm('清空所有股價，等下次 GAS 更新？')) return;
+    STATE.prices = {};
     savePrices({updatedAt:'', source:''});
     renderPrices();
     renderAll();
