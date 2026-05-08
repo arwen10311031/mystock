@@ -374,6 +374,8 @@ function buildHoldings(){
 function renderDashboard(){
   const map = buildHoldings();
   let cost=0, value=0, unreal=0, real=0, divR=0, divF=0;
+  // 為了讓「總報酬率」分母（持股成本）和分子一致，把「持股」與「已賣光」分開累計
+  let divR_held=0, divR_sold=0, real_held=0, real_sold=0;
   for (const c of Object.keys(map)){
     const a = map[c];
     cost += a.cost;
@@ -382,6 +384,13 @@ function renderDashboard(){
     real += a.realized;
     divR += a.divReceived;
     divF += a.divForecast;
+    if (a.units > 0){
+      divR_held += a.divReceived;
+      real_held += a.realized;          // 持股期間部分賣出的實現損益（仍持有同檔）
+    } else {
+      divR_sold += a.divReceived;
+      real_sold += a.realized;
+    }
   }
   $('#kpi-cost').textContent = fmt(cost);
   $('#kpi-value').textContent = fmt(value);
@@ -391,12 +400,18 @@ function renderDashboard(){
   $('#kpi-unreal-sub').className='delta '+cls(unreal);
   $('#kpi-real').textContent = fmt(real);
   $('#kpi-real').className='value '+cls(real);
+  // 已實現損益 sub：說明已賣光部分
+  $('#kpi-real-sub').textContent = real_sold !== 0 ? `含已賣光 ${fmt(real_sold)}` : '';
   $('#kpi-div').textContent = fmt(divR);
-  $('#kpi-div-sub').textContent = `預估未領 ${fmt(divF)}`;
-  const total = unreal+real+divR;
+  $('#kpi-div-sub').textContent = divR_sold !== 0
+    ? `預估未領 ${fmt(divF)}　已賣光 ${fmt(divR_sold)}`
+    : `預估未領 ${fmt(divF)}`;
+  // 總報酬只計入「目前還持有」這些股票的損益：未實現 + 持股期間實現 + 持股的歷史配息
+  // 不再加入「已賣光股票」的實現損益和配息（因為分母 cost 不含它們）
+  const total = unreal + real_held + divR_held;
   $('#kpi-total').textContent = fmt(total);
   $('#kpi-total').className='value '+cls(total);
-  $('#kpi-total-sub').textContent = pct(cost>0?total/cost:0);
+  $('#kpi-total-sub').textContent = pct(cost>0?total/cost:0) + '（持股）';
   $('#kpi-total-sub').className='delta '+cls(total);
   $('#kpi-cost-sub').textContent = `共 ${Object.values(map).filter(a=>a.units>0).length} 檔持股`;
   $('#kpi-value-sub').textContent = (value>cost?'+':'') + fmt(value-cost) + ' vs 成本';
@@ -953,7 +968,15 @@ function renderAnnual(){
 
 // ---------- 股價 ----------
 function renderPrices(){
+  // 更新「上次更新時間」（總覽 + 股價更新分頁同步顯示）
+  const updateInfo = (STATE.priceMeta && STATE.priceMeta.updatedAt)
+    ? `上次更新：${STATE.priceMeta.updatedAt}（${STATE.priceMeta.source && (STATE.priceMeta.source.startsWith('twse')||STATE.priceMeta.source.startsWith('gas'))?'自動抓取':'手動輸入'}）`
+    : '';
+  if ($('#priceUpdateInfo')) $('#priceUpdateInfo').textContent = updateInfo;
+  if ($('#dashPriceUpdateInfo')) $('#dashPriceUpdateInfo').textContent = updateInfo;
+
   const root = $('#priceGrid');
+  if (!root) return;
   root.innerHTML='';
   const codes = heldCodes();
   $('#priceCount').textContent = `共 ${codes.length} 檔現持股`;
@@ -984,16 +1007,13 @@ function renderPrices(){
     renderAll();
   };
   $('#recalc').onclick = () => renderAll();
-  $('#fetchPrices').onclick = () => fetchTwsePrices('yesterday'); $('#fetchPricesLive').onclick = () => fetchTwsePrices('live');
+  if ($('#fetchPrices')) $('#fetchPrices').onclick = () => fetchTwsePrices('yesterday');
+  if ($('#fetchPricesLive')) $('#fetchPricesLive').onclick = () => fetchTwsePrices('live');
   if ($('#fetchPricesOpenAPI')) $('#fetchPricesOpenAPI').onclick = fetchTwseOpenAPI;
   if ($('#pastePricesBtn')) $('#pastePricesBtn').onclick = pastePricesJson;
   if ($('#fetchPricesGASLive')) $('#fetchPricesGASLive').onclick = () => fetchPricesViaGAS('live');
   if ($('#fetchPricesGAS')) $('#fetchPricesGAS').onclick = () => fetchPricesViaGAS('yesterday');
-  if (STATE.priceMeta && STATE.priceMeta.updatedAt){
-    $('#priceUpdateInfo').textContent = `上次更新：${STATE.priceMeta.updatedAt}（${STATE.priceMeta.source && STATE.priceMeta.source.startsWith('twse')?'自動抓取':'手動輸入'}）`;
-  } else {
-    $('#priceUpdateInfo').textContent = '';
-  }
+  if ($('#dashFetchPricesGASLive')) $('#dashFetchPricesGASLive').onclick = () => fetchPricesViaGAS('live');
 }
 
 
@@ -1079,18 +1099,24 @@ async function pastePricesJson(){
 // 透過 Google Apps Script 抓股價（不靠 CORS proxy，最穩）
 async function fetchPricesViaGAS(mode){
   if (!STATE.sheetsUrl){ alert('請先到「設定」貼上 Apps Script URL'); return; }
-  const btn = mode==='live' ? $('#fetchPricesGASLive') : $('#fetchPricesGAS');
-  if (!btn) return;
-  btn.disabled = true;
-  const orig = btn.textContent;
-  btn.textContent = '抓取中…';
-  const status = $('#fetchStatus');
-  status.textContent = '走 Apps Script 抓 TWSE…';
+  // 同時鎖兩顆 GAS 按鈕（不論點哪一個都顯示中）
+  const btns = [
+    mode==='live' ? $('#fetchPricesGASLive') : $('#fetchPricesGAS'),
+    $('#dashFetchPricesGASLive'),
+  ].filter(Boolean);
+  if (btns.length === 0) return;
+  const origs = btns.map(b => b.textContent);
+  btns.forEach((b,i) => { b.disabled = true; b.textContent = '抓取中…'; });
+  const statusEls = [$('#fetchStatus'), $('#dashFetchStatus')].filter(Boolean);
+  const setStatus = (html) => statusEls.forEach(s => { s.innerHTML = html; });
+  setStatus('走 Apps Script 抓 TWSE…');
+
+  const restore = () => btns.forEach((b,i) => { b.disabled = false; b.textContent = origs[i]; });
 
   const codes = heldCodes();
   if (codes.length === 0){
-    status.innerHTML = '<span class="sub">目前沒有持股</span>';
-    btn.disabled = false; btn.textContent = orig;
+    setStatus('<span class="sub">目前沒有持股</span>');
+    restore();
     return;
   }
 
@@ -1103,20 +1129,20 @@ async function fetchPricesViaGAS(mode){
 
     const got = Object.keys(json.prices || {}).length;
     if (got === 0){
-      status.innerHTML = `<span class="red">GAS 抓到 0 檔</span>　錯誤：${(json.errors||[]).join(' / ') || '未知'}`;
-      btn.disabled = false; btn.textContent = orig;
+      setStatus(`<span class="red">GAS 抓到 0 檔</span>　錯誤：${(json.errors||[]).join(' / ') || '未知'}`);
+      restore();
       return;
     }
     Object.assign(STATE.prices, json.prices);
     const dateStr = json.price_date || new Date().toISOString().slice(0,10);
     savePrices({updatedAt: dateStr + ' ' + new Date().toTimeString().slice(0,5), source: mode==='live'?'gas-live':(mode==='yesterday'?'gas-yest':'gas')});
-    status.innerHTML = `<span class="green">✔ GAS 抓到 ${got}/${json.total} 檔 (報價日 ${dateStr})</span>${json.missing && json.missing.length?` 缺：${json.missing.join(', ')}`:''}`;
+    setStatus(`<span class="green">✔ GAS 抓到 ${got}/${json.total} 檔 (報價日 ${dateStr})</span>${json.missing && json.missing.length?` 缺：${json.missing.join(', ')}`:''}`);
     renderPrices();
     renderAll();
   } catch(e){
-    status.innerHTML = `<span class="red">GAS 抓取失敗：${e.message}</span>　請確認 Apps Script 已部署最新版且設「任何人」可存取`;
+    setStatus(`<span class="red">GAS 抓取失敗：${e.message}</span>　請確認 Apps Script 已部署最新版且設「任何人」可存取`);
   } finally {
-    btn.disabled = false; btn.textContent = orig;
+    restore();
   }
 }
 

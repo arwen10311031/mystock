@@ -111,6 +111,105 @@
   ::-webkit-scrollbar-track{background:transparent}
   ::-webkit-scrollbar-thumb{background:#2a3340;border-radius:5px}
   ::-webkit-scrollbar-thumb:hover{background:#3a4350}
+
+  /* ================== RWD ================== */
+  /* 平板 / 小筆電 */
+  @media (max-width: 900px){
+    main{padding:14px 14px 70px}
+    header{padding:10px 14px;flex-wrap:wrap;gap:8px}
+    header h1{font-size:16px;flex:1 1 auto}
+    nav{padding:0 10px}
+    nav button{padding:10px 12px;font-size:13px}
+    .panel{padding:12px}
+    .cards{grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px}
+    .card{padding:12px}
+    .card .value{font-size:18px}
+    .chart-wrap{height:260px}
+    .price-grid{grid-template-columns:repeat(auto-fill,minmax(180px,1fr))}
+  }
+
+  /* 手機 */
+  @media (max-width: 600px){
+    body{font-size:14px}
+    main{padding:10px 10px 70px}
+
+    /* 頂端列：標題 + who-filter + 登出 換行排好 */
+    header{padding:10px 12px;gap:8px}
+    header h1{font-size:15px;width:100%;order:1}
+    header .who-filter{order:2;flex:1}
+    header .who-filter button{flex:1;padding:6px 0;font-size:12px;text-align:center}
+    header .actions{order:3}
+    header .actions button{padding:6px 10px;font-size:12px}
+
+    /* 分頁標籤橫向滾、留出夠擊中的高度 */
+    nav{padding:0 6px}
+    nav button{padding:11px 10px;font-size:13px}
+
+    /* KPI 卡：兩欄式 */
+    .cards{grid-template-columns:repeat(2,1fr);gap:8px}
+    .card{padding:10px 12px}
+    .card .label{font-size:11px;margin-bottom:3px}
+    .card .value{font-size:17px}
+    .card .delta{font-size:11px}
+
+    .panel{padding:12px;margin-top:12px;border-radius:8px}
+    .panel h3{font-size:13px;margin-bottom:10px}
+
+    .chart-wrap{height:230px}
+
+    /* 表格：橫向捲動，固定高度收一點 */
+    .scroll{max-height:60vh}
+    table{font-size:12px;min-width:560px}  /* 強制橫向 scroll 而不擠壓 */
+    table thead th{padding:8px 6px;font-size:11px}
+    table tbody td{padding:7px 6px}
+    .inline-date{width:110px;font-size:12px}
+
+    /* 篩選列／工具列 */
+    .filter-bar{gap:6px;margin-bottom:10px}
+    .filter-bar select,.filter-bar input{padding:6px 8px;font-size:13px}
+
+    /* 表單列：上下排版（label 在上，input 撐滿） */
+    .form-grid{grid-template-columns:1fr;gap:12px}
+    .form-card{padding:12px}
+    .form-row{flex-direction:column;align-items:stretch;gap:4px;margin-bottom:10px}
+    .form-row label{min-width:0;font-size:12px}
+    .form-row input,.form-row select{width:100% !important;flex:1;font-size:16px;padding:9px 10px}  /* 16px 防止 iOS auto-zoom */
+    .form-row input[type="date"]{width:100% !important}
+    .form-row .small{font-size:11px}
+
+    /* 持股組成的圓餅 + legend 直立 */
+    .holdings-layout{flex-direction:column;gap:10px;align-items:stretch}
+    .holdings-legend{max-height:none;flex:none}
+    .legend-item{grid-template-columns:12px minmax(0,1fr) 50px 60px 44px;gap:6px;font-size:12px;padding:4px 6px}
+
+    /* 股價更新格子：兩欄 */
+    .price-grid{grid-template-columns:repeat(2,1fr);gap:8px}
+    .price-grid .row{padding:7px 8px;gap:6px}
+    .price-grid .row .name{font-size:12px}
+    .price-grid .row .code{font-size:10px}
+    .price-grid .row input{width:70px;font-size:14px;padding:5px 6px}
+
+    /* 按鈕 */
+    .btn{padding:9px 12px;font-size:13px}
+
+    /* footer 收一點 */
+    .footer{padding:5px 12px;font-size:10px;flex-wrap:wrap;gap:4px;justify-content:center;text-align:center}
+    .footer span{flex:1 1 auto}
+
+    /* 登入 */
+    #login .box{width:88vw;padding:24px 20px}
+
+    details{padding:8px 10px}
+  }
+
+  /* 超窄機（iPhone SE 等 < 380px） */
+  @media (max-width: 380px){
+    .cards{grid-template-columns:1fr 1fr;gap:6px}
+    .card .value{font-size:16px}
+    .price-grid{grid-template-columns:1fr}
+    .price-grid .row input{width:80px}
+    nav button{padding:10px 8px;font-size:12px}
+  }
 </style>
 </head>
 <body>
@@ -156,6 +255,12 @@
   <main>
     <!-- Dashboard -->
     <section id="tab-dash">
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
+        <button class="btn" id="dashFetchPricesGASLive" title="透過你的 Apps Script 抓即時成交價">⚡ GAS 即時更新股價</button>
+        <span class="small" id="dashFetchStatus" style="min-height:18px"></span>
+        <span style="flex:1"></span>
+        <span class="small" id="dashPriceUpdateInfo"></span>
+      </div>
       <div class="grid cards">
         <div class="card"><div class="label">總投資成本</div><div class="value" id="kpi-cost">-</div><div class="delta sub" id="kpi-cost-sub"></div></div>
         <div class="card"><div class="label">目前現值</div><div class="value" id="kpi-value">-</div><div class="delta sub" id="kpi-value-sub"></div></div>
@@ -420,10 +525,9 @@
       <div class="panel">
         <h3>股價更新</h3>
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-          <button class="btn" id="fetchPricesLive">⚡ 即時最新</button>
-          <button class="btn ghost" id="fetchPrices">🔄 昨日收盤</button>
           <button class="btn" id="fetchPricesGASLive" title="透過你的 Apps Script 抓即時成交價，最穩">⚡ GAS 即時</button>
           <button class="btn ghost" id="fetchPricesGAS" title="透過你的 Apps Script 抓昨日收盤">🔄 GAS 昨收</button>
+          <button class="btn ghost" id="fetchPrices">🔄 昨日收盤 (proxy)</button>
           <button class="btn ghost" id="fetchPricesOpenAPI" title="走 TWSE 官方 API（不靠 CORS proxy）">📡 官方 API</button>
           <button class="btn ghost" id="pastePricesBtn" title="從剪貼簿貼上本機 fetch_prices.py 輸出的 JSON">📋 貼上 JSON</button>
           <button class="btn ghost" id="resetPrices">回復為 Excel 預設值</button>
@@ -431,9 +535,9 @@
           <span class="small" id="priceCount"></span> <span class="small" id="priceUpdateInfo"></span>
         </div>
         <div class="small" id="fetchStatus" style="margin-bottom:10px;min-height:18px"></div>
-        <p class="small">抓取方式（從穩到不穩）：<b>⚡/🔄 GAS</b>（你的 Apps Script 直連 TWSE，最穩）→ <b>📡 官方 API</b>（TWSE OpenAPI 收盤）→ <b>📋 貼上 JSON</b>（本機 fetch_prices.py）→ ⚡/🔄 即時/昨收（走公開 CORS proxy，可能掛）：<br>
-          <b>⚡ 即時最新</b>：交易時段內為當下成交價；非交易時段則為當天 (或最近一個交易日) 收盤價。<br>
-          <b>🔄 昨日收盤</b>：永遠抓前一個交易日的收盤價。<br>
+        <p class="small">抓取方式（從穩到不穩）：<b>⚡/🔄 GAS</b>（你的 Apps Script 直連 TWSE，最穩）→ <b>📡 官方 API</b>（TWSE OpenAPI 收盤）→ <b>📋 貼上 JSON</b>（本機 fetch_prices.py）→ <b>🔄 昨日收盤 (proxy)</b>（走公開 CORS proxy，可能掛）：<br>
+          <b>⚡ GAS 即時</b>：交易時段內為當下成交價；非交易時段則為當天 (或最近一個交易日) 收盤價。<br>
+          <b>🔄 GAS 昨收</b>：永遠抓前一個交易日的收盤價。<br>
           抓不到時會自動換下一個 proxy；都失敗就手動填、或執行同層的 <code>fetch_prices.py</code>。</p>
         <div class="price-grid" id="priceGrid"></div>
         <hr>
