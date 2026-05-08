@@ -1,12 +1,12 @@
-/* 個人投資紀錄 v1.1
+/* 個人投資紀錄 v1.2
    localStorage：
-   - mystock.pwHash       : 密碼 SHA-256
-   - mystock.prices       : { code: priceNumber }
-   - mystock.priceMeta    : { updatedAt: 'YYYY-MM-DD HH:mm', source: 'twse|manual' }
    - mystock.fee          : { feeRate, feeMin, taxStock, taxEtf }
    - mystock.fc           : { code: { perShare, freq, startMonth, enabled } }
    - mystock.userRecords  : [{ ...record, _id: 'user-xxx' }]
    - mystock.overrides    : { _id: { sell_date, sell_price, ...其他可覆寫欄位 } }
+   - mystock.sheetsUrl    : Apps Script URL
+   - mystock.lastFetchProxy : 上次成功的 CORS proxy
+   ※ 股價、報價時間、密碼皆不持久化（避免不同裝置看到不同快取）
 */
 
 // ---------- 工具 ----------
@@ -59,7 +59,6 @@ const STATE = {
   lastFetchProxy: '',
   sheetsUrl: '',  // Google Apps Script Web App URL
 };
-const DEFAULT_PASSWORD = 'mystock2026';
 
 // ---------- 初始化 records 加 _id ----------
 (function initIds(){
@@ -68,54 +67,35 @@ const DEFAULT_PASSWORD = 'mystock2026';
 
 // ---------- 載入設定 ----------
 function loadLocal(){
-  try { STATE.prices = JSON.parse(localStorage.getItem('mystock.prices')||'null') || {...STATE.data.latest_prices}; }
-  catch(e){ STATE.prices = {...STATE.data.latest_prices}; }
+  // 股價：不再 localStorage，每次開頁面都從 data.js 的 latest_prices 開始
+  // （之後使用者按 GAS 即時 / 昨收 等按鈕會更新到記憶體）
+  // 這樣不同裝置打開不會看到不同的快取股價
+  STATE.prices = {...(STATE.data.latest_prices || {})};
   for (const c of Object.keys(STATE.data.code_to_name)) {
-    if (STATE.prices[c]==null) STATE.prices[c] = STATE.data.latest_prices[c] ?? null;
+    if (STATE.prices[c]==null) STATE.prices[c] = STATE.data.latest_prices?.[c] ?? null;
   }
+  STATE.priceMeta = { updatedAt: '', source: '' };
+  // 清掉舊的 localStorage（避免新版上線後還留著舊快取造成困惑）
+  try { localStorage.removeItem('mystock.prices'); localStorage.removeItem('mystock.priceMeta'); } catch(e){}
+
   try { const f = JSON.parse(localStorage.getItem('mystock.fee')||'null'); if(f) Object.assign(STATE.fee, f); } catch(e){}
   try { STATE.forecast = JSON.parse(localStorage.getItem('mystock.fc')||'{}') || {}; } catch(e){ STATE.forecast={}; }
   try { STATE.userRecords = JSON.parse(localStorage.getItem('mystock.userRecords')||'[]') || []; } catch(e){ STATE.userRecords=[]; }
   try { STATE.overrides = JSON.parse(localStorage.getItem('mystock.overrides')||'{}') || {}; } catch(e){ STATE.overrides={}; }
-  try { STATE.priceMeta = JSON.parse(localStorage.getItem('mystock.priceMeta')||'null') || {updatedAt:'',source:''}; } catch(e){}
   STATE.lastFetchProxy = localStorage.getItem('mystock.lastFetchProxy') || '';
   STATE.sheetsUrl = localStorage.getItem('mystock.sheetsUrl') || '';
 }
-function savePrices(meta){ localStorage.setItem('mystock.prices', JSON.stringify(STATE.prices)); if(meta){STATE.priceMeta=meta; localStorage.setItem('mystock.priceMeta', JSON.stringify(meta));} }
+// 股價只放記憶體，不寫 localStorage
+function savePrices(meta){ if(meta){ STATE.priceMeta = meta; } }
 function saveFee(){ localStorage.setItem('mystock.fee', JSON.stringify(STATE.fee)); }
 function saveForecast(){ localStorage.setItem('mystock.fc', JSON.stringify(STATE.forecast)); }
 function saveUserRecords(){ localStorage.setItem('mystock.userRecords', JSON.stringify(STATE.userRecords)); }
 function saveOverrides(){ localStorage.setItem('mystock.overrides', JSON.stringify(STATE.overrides)); }
 
-// ---------- 登入 ----------
-async function initLogin(){
-  if (!localStorage.getItem('mystock.pwHash')){
-    localStorage.setItem('mystock.pwHash', await sha256(DEFAULT_PASSWORD));
-  }
-  $('#pw').focus();
-  $('#loginBtn').onclick = tryLogin;
-  $('#pw').addEventListener('keydown', e => { if(e.key==='Enter') tryLogin(); });
-}
-async function tryLogin(){
-  const pw = $('#pw').value;
-  if(!pw) return;
-  const h = await sha256(pw);
-  if (h === localStorage.getItem('mystock.pwHash')){
-    sessionStorage.setItem('mystock.unlocked','1');
-    showApp();
-  } else {
-    $('#loginErr').textContent = '密碼錯誤';
-    $('#pw').value=''; $('#pw').focus();
-  }
-}
+// ---------- 進入 App（密碼登入已移除）----------
 function showApp(){
-  $('#login').style.display='none';
   $('#app').style.display='block';
   initApp();
-}
-function logout(){
-  sessionStorage.removeItem('mystock.unlocked');
-  location.reload();
 }
 
 
@@ -128,10 +108,16 @@ async function loadFromSheets(){
     if (!r.ok) throw new Error('HTTP '+r.status);
     const json = await r.json();
     if (json.error) throw new Error(json.error);
-    // 保留原有的 latest_prices fallback
+    // 保留原有的 latest_prices fallback（data.js 內建的）
     json.latest_prices = STATE.data.latest_prices || {};
     STATE.data = json;
     STATE.data.records.forEach((r,i) => { r._id = `xls-${i}`; });
+    // 重建 STATE.prices：以 fallback 為基礎，新代碼補上 null
+    const newPrices = {...(STATE.data.latest_prices || {})};
+    for (const c of Object.keys(STATE.data.code_to_name || {})){
+      if (newPrices[c] == null) newPrices[c] = null;
+    }
+    STATE.prices = newPrices;
     return true;
   } catch(e){
     console.warn('Sheets 載入失敗，使用 data.js:', e);
@@ -1602,7 +1588,11 @@ function renderSettings(){
         const ok = await loadFromSheets();
         $('#sheetsUrlMsg').textContent = ok ? `✔ 從 Sheets 載入 ${STATE.data.records.length} 筆` : '✗ 連不上，請檢查 URL 與部署設定';
         $('#sheetsUrlMsg').className = ok ? 'small green' : 'small red';
-        if (ok) renderAll();
+        if (ok){
+          renderAll();
+          // 第一次設定 URL 之後抓一次股價
+          try { fetchPricesViaGAS('live'); } catch(e){}
+        }
       } else {
         $('#sheetsUrlMsg').textContent = '已清除';
       }
@@ -1627,16 +1617,7 @@ function renderSettings(){
       if (ok) renderAll();
     };
   }
-  $('#changePw').onclick = async () => {
-    const a = $('#newPw').value, b = $('#newPw2').value;
-    if (!a){ $('#pwMsg').textContent='請輸入密碼'; return; }
-    if (a!==b){ $('#pwMsg').textContent='兩次密碼不同'; return; }
-    if (a.length<4){ $('#pwMsg').textContent='密碼太短'; return; }
-    localStorage.setItem('mystock.pwHash', await sha256(a));
-    $('#newPw').value=''; $('#newPw2').value='';
-    $('#pwMsg').textContent='已更新密碼，下次登入生效';
-    $('#pwMsg').className='small green';
-  };
+  // 密碼登入功能已移除
   $('#exportSettings').onclick = () => {
     const obj = { prices:STATE.prices, fee:STATE.fee, forecast:STATE.forecast, userRecords:STATE.userRecords, overrides:STATE.overrides };
     const blob = new Blob([JSON.stringify(obj,null,2)], {type:'application/json'});
@@ -1698,7 +1679,7 @@ function bindTabs(){
   const hw = $('#holdingsWho'); if (hw) hw.onchange = e => { _holdingsWhoOverride = e.target.value; renderHoldings(); };
   $$('#tradeStock,#tradeStatus').forEach(s => s.onchange = renderTrades);
   $$('#divStock,#divYear,#divKind').forEach(s => s.onchange = renderDividends);
-  $('#logoutBtn').onclick = logout;
+  // 登出按鈕已移除（因為登入也移除了）
 }
 
 function renderAll(){
@@ -1731,12 +1712,16 @@ async function initApp(){
   $('#updated').textContent = `資料更新 ${STATE.data.updated_at}`;
   bindTabs();
   renderAll();
+
+  // 開頁時自動抓一次最新股價，之後就靠使用者手動點按鈕
+  if (STATE.sheetsUrl){
+    setTimeout(() => {
+      try { fetchPricesViaGAS('live'); } catch(e){ console.warn('自動抓價失敗', e); }
+    }, 300);
+  }
 }
 
+// 已移除密碼登入：直接進入 app
 (async () => {
-  if (!localStorage.getItem('mystock.pwHash')){
-    localStorage.setItem('mystock.pwHash', await sha256(DEFAULT_PASSWORD));
-  }
-  if (sessionStorage.getItem('mystock.unlocked')==='1') showApp();
-  else initLogin();
+  showApp();
 })();

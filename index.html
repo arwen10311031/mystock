@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, viewport-fit=cover" />
 <title>個人投資紀錄</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.0/chart.umd.min.js"></script>
 <style>
@@ -12,22 +12,14 @@
     --green:#3ddc84; --red:#ff6b6b; --yellow:#ffc857;
   }
   *{box-sizing:border-box}
+  html,body{max-width:100vw;overflow-x:hidden}
   body{margin:0;background:var(--bg);color:var(--text);font-family:-apple-system,"Segoe UI","PingFang TC","Microsoft JhengHei",sans-serif;font-size:14px}
+  img,canvas,svg{max-width:100%}
   a{color:var(--accent-2)}
   button{cursor:pointer;font:inherit}
   input,select{font:inherit}
-  /* Login */
-  #login{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:linear-gradient(135deg,#0a1422,#15233a);z-index:100}
-  #login .box{background:var(--panel);padding:36px 40px;border-radius:12px;width:340px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
-  #login h1{margin:0 0 8px;font-size:22px}
-  #login p{color:var(--sub);margin:0 0 18px;font-size:13px}
-  #login input{width:100%;padding:11px 14px;border-radius:8px;border:1px solid var(--line);background:#0e1620;color:var(--text);outline:none;font-size:15px}
-  #login input:focus{border-color:var(--accent)}
-  #login button{margin-top:12px;width:100%;padding:11px;border-radius:8px;border:0;background:var(--accent);color:#fff;font-weight:600;font-size:15px}
-  #login .err{color:var(--red);font-size:12px;margin-top:8px;min-height:16px}
-  #login .hint{color:var(--sub);font-size:11px;margin-top:14px;text-align:center}
   /* App */
-  #app{display:none}
+  #app{display:block}
   header{display:flex;align-items:center;justify-content:space-between;padding:14px 24px;border-bottom:1px solid var(--line);background:var(--panel)}
   header h1{margin:0;font-size:18px;display:flex;align-items:center;gap:10px;flex-wrap:wrap}
   header .who-filter{display:flex;gap:6px}
@@ -196,9 +188,6 @@
     .footer{padding:5px 12px;font-size:10px;flex-wrap:wrap;gap:4px;justify-content:center;text-align:center}
     .footer span{flex:1 1 auto}
 
-    /* 登入 */
-    #login .box{width:88vw;padding:24px 20px}
-
     details{padding:8px 10px}
   }
 
@@ -214,18 +203,6 @@
 </head>
 <body>
 
-<!-- Login Screen -->
-<div id="login">
-  <div class="box">
-    <h1>個人投資紀錄</h1>
-    <p>請輸入密碼進入</p>
-    <input id="pw" type="password" placeholder="密碼" autocomplete="current-password" />
-    <button id="loginBtn">登入</button>
-    <div class="err" id="loginErr"></div>
-    <div class="hint">v1 預設密碼：<code>mystock2026</code>，登入後可在「設定」修改</div>
-  </div>
-</div>
-
 <!-- App -->
 <div id="app">
   <header>
@@ -235,9 +212,7 @@
       <button data-who="我">我</button>
       <button data-who="Max">Max</button>
     </div>
-    <div class="actions">
-      <button id="logoutBtn">登出</button>
-    </div>
+    <div class="actions"></div>
   </header>
 
   <nav id="nav">
@@ -564,13 +539,6 @@
           <b>🔖 複製設定連結</b>：產生帶 URL 的網址，書籤後新裝置開啟自動帶入 URL，免去手動複製貼上。<br>
           <span class="sub">註：URL 在網址 # 之後，不會送到伺服器，僅在本機處理。</span>
         </p>
-      </div>
-      <div class="panel">
-        <h3>登入密碼</h3>
-        <div class="form-row"><label>新密碼</label><input id="newPw" type="password" /></div>
-        <div class="form-row"><label>再輸入一次</label><input id="newPw2" type="password" /></div>
-        <button class="btn" id="changePw">變更密碼</button>
-        <span class="small" id="pwMsg"></span>
       </div>
       <div class="panel">
         <h3>手續費設定</h3>
