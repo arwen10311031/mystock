@@ -84,15 +84,24 @@
   @keyframes flashSaved{0%{background:rgba(61,220,132,.25)}100%{background:transparent}}
   .chart-wrap{position:relative;height:300px;min-width:0;width:100%}
   .chart-pie{flex:1 1 320px;max-width:100%}
+  /* 月配息圖：Y 軸固定 + X 軸/長條可橫向 scroll */
+  .chart-monthly-frame{display:flex;align-items:stretch;height:300px;max-width:100%}
+  .chart-yaxis-wrap{flex:0 0 64px;height:100%;position:relative;border-right:1px solid #2a3340}
+  .chart-yaxis-wrap .ytick{position:absolute;right:6px;font-size:10px;color:#8b96a5;line-height:1;font-variant-numeric:tabular-nums;white-space:nowrap;transform:translateY(-50%)}
+  .chart-scroll{flex:1;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;min-width:0}
+  .chart-monthly-wrap{height:100% !important;width:auto}  /* 由 JS 設 px 寬 */
+  .chart-scroll::-webkit-scrollbar{height:8px}
+  .chart-scroll::-webkit-scrollbar-thumb{background:#3a4350;border-radius:4px}
   .holdings-layout{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
   .holdings-legend{flex:1 1 320px;min-width:0;max-width:100%;display:grid;gap:4px;font-size:13px;max-height:300px;overflow:auto;padding-right:6px}
-  .legend-item{display:grid;grid-template-columns:14px minmax(0,1fr) 56px 72px 50px;gap:8px;align-items:center;padding:5px 8px;border-radius:5px}
+  .legend-item{display:grid;grid-template-columns:14px minmax(0,1fr) 56px 64px 92px 50px;gap:8px;align-items:center;padding:5px 8px;border-radius:5px}
   .legend-item:hover{background:rgba(255,255,255,.04)}
   .legend-dot{width:12px;height:12px;border-radius:3px;display:inline-block}
   .legend-name{color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
   .legend-code{color:var(--sub);font-size:11px;margin-left:4px}
   .legend-lots{color:var(--accent-2);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right}
   .legend-odd{color:var(--accent-2);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;text-align:left;opacity:.85}
+  .legend-market{color:var(--text);font-size:12px;font-variant-numeric:tabular-nums;white-space:nowrap;text-align:right}
   .legend-pct{color:var(--sub);font-variant-numeric:tabular-nums;font-size:12px;text-align:right}
   .tag{font-size:11px;padding:2px 6px;border-radius:4px;background:var(--panel-2);color:var(--sub);margin-left:6px}
   .filter-bar{display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap}
@@ -184,7 +193,10 @@
     .holdings-layout{flex-direction:column;gap:10px;align-items:stretch}
     .chart-wrap{flex:none !important;min-width:0 !important;width:100% !important}
     .holdings-legend{max-height:none;flex:none;min-width:0 !important;width:100% !important}
-    .legend-item{grid-template-columns:12px minmax(0,1fr) 50px 60px 44px;gap:6px;font-size:12px;padding:4px 6px}
+    .legend-item{grid-template-columns:12px minmax(0,1fr) 42px 50px 76px 38px;gap:5px;font-size:12px;padding:4px 6px}
+    .legend-market{font-size:11px}
+    .legend-lots,.legend-odd{font-size:11px}
+    .legend-pct{font-size:11px}
 
     /* 表格容器固定 100% 寬，內容才橫向 scroll */
     .scroll{width:100%;overflow-x:auto}
@@ -238,7 +250,6 @@
     <button data-tab="monthly">每月配息</button>
     <button data-tab="add">➕ 新增</button>
     <button data-tab="annual">📅 年度預估</button>
-    <button data-tab="prices">股價更新</button>
     <button data-tab="settings">設定</button>
   </nav>
 
@@ -270,7 +281,7 @@
 
       <div class="panel">
         <h3>每月配息（含預估）</h3>
-        <div class="chart-wrap"><canvas id="chartMonthly"></canvas></div>
+        <div class="chart-monthly-frame"><div class="chart-yaxis-wrap" id="chartMonthly_y"></div><div class="chart-scroll"><div class="chart-wrap chart-monthly-wrap"><canvas id="chartMonthly"></canvas></div></div></div>
       </div>
     </section>
 
@@ -375,7 +386,7 @@
       </div>
       <div class="panel">
         <h3>每月配息收入</h3>
-        <div class="chart-wrap" style="height:340px"><canvas id="chartMonthly2"></canvas></div>
+        <div class="chart-monthly-frame" style="height:340px"><div class="chart-yaxis-wrap" id="chartMonthly2_y"></div><div class="chart-scroll"><div class="chart-wrap chart-monthly-wrap"><canvas id="chartMonthly2"></canvas></div></div></div>
       </div>
       <div class="panel">
         <h3>年度匯總</h3>
@@ -408,6 +419,20 @@
           </div>
           <div class="form-row"><label>日期</label><input type="date" id="buyDate"></div>
           <div class="form-row"><label>股票</label><select id="buyStock" style="width:auto;flex:1"></select></div>
+          <div class="form-row" style="margin-top:-2px;margin-bottom:6px">
+            <label></label>
+            <button type="button" class="iconbtn" id="toggleAddStock" style="font-size:11px;padding:3px 8px">➕ 找不到？新增其他標的</button>
+          </div>
+          <div id="addStockBox" hidden style="margin:0 0 10px;padding:10px;background:#0e1620;border-radius:6px;border:1px dashed var(--line)">
+            <div class="form-row"><label style="min-width:60px">代碼</label><input type="text" id="newStockCode" placeholder="例：3231" style="width:auto;flex:1"></div>
+            <div class="form-row"><label style="min-width:60px">名稱</label><input type="text" id="newStockName" placeholder="例：緯創" style="width:auto;flex:1"></div>
+            <div style="display:flex;gap:6px;margin-top:6px">
+              <button type="button" class="btn" id="addStockBtn">加入下拉清單</button>
+              <button type="button" class="btn ghost" id="cancelAddStock">取消</button>
+              <span class="small" id="addStockMsg"></span>
+            </div>
+            <div class="small sub" style="margin-top:6px">會記在你的瀏覽器內。如果是上市/上櫃股票，記得也回 Google Sheets 補上。</div>
+          </div>
           <div class="form-row"><label>買價</label><input type="number" id="buyPrice" step="0.01" placeholder="例：18.50"></div>
           <div class="form-row"><label>股數</label><input type="number" id="buyUnits" step="1" placeholder="例：1000"></div>
           <div class="calc">成交金額 <b id="buyAmount">-</b>　手續費 <b id="buyFee">-</b><br>買進成本 <b id="buyTotal">-</b></div>
@@ -508,34 +533,6 @@
           4. 殖利率 = 全年合計 / 對應股票的成本（成交價×股數）
         </div>
       </details>
-    </section>
-
-    <!-- Prices -->
-    <section id="tab-prices" hidden>
-      <div class="panel">
-        <h3>股價更新</h3>
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px">
-          <button class="btn" id="fetchPricesGASLive" title="透過你的 Apps Script 抓即時成交價，最穩">⚡ GAS 即時</button>
-          <button class="btn ghost" id="fetchPricesGAS" title="透過你的 Apps Script 抓昨日收盤">🔄 GAS 昨收</button>
-          <button class="btn ghost" id="fetchPrices">🔄 昨日收盤 (proxy)</button>
-          <button class="btn ghost" id="fetchPricesOpenAPI" title="走 TWSE 官方 API（不靠 CORS proxy）">📡 官方 API</button>
-          <button class="btn ghost" id="pastePricesBtn" title="從剪貼簿貼上本機 fetch_prices.py 輸出的 JSON">📋 貼上 JSON</button>
-          <button class="btn ghost" id="resetPrices">回復為 Excel 預設值</button>
-          <span style="flex:1"></span>
-          <span class="small" id="priceCount"></span> <span class="small" id="priceUpdateInfo"></span>
-        </div>
-        <div class="small" id="fetchStatus" style="margin-bottom:10px;min-height:18px"></div>
-        <p class="small">抓取方式（從穩到不穩）：<b>⚡/🔄 GAS</b>（你的 Apps Script 直連 TWSE，最穩）→ <b>📡 官方 API</b>（TWSE OpenAPI 收盤）→ <b>📋 貼上 JSON</b>（本機 fetch_prices.py）→ <b>🔄 昨日收盤 (proxy)</b>（走公開 CORS proxy，可能掛）：<br>
-          <b>⚡ GAS 即時</b>：交易時段內為當下成交價；非交易時段則為當天 (或最近一個交易日) 收盤價。<br>
-          <b>🔄 GAS 昨收</b>：永遠抓前一個交易日的收盤價。<br>
-          抓不到時會自動換下一個 proxy；都失敗就手動填、或執行同層的 <code>fetch_prices.py</code>。</p>
-        <div class="price-grid" id="priceGrid"></div>
-        <hr>
-        <div style="display:flex;gap:8px">
-          <span style="flex:1"></span>
-          <button class="btn" id="recalc">重算所有報酬</button>
-        </div>
-      </div>
     </section>
 
     <!-- Settings -->

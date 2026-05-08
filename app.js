@@ -13,6 +13,14 @@
 const fmt = n => (n==null||isNaN(n))?'-':Number(n).toLocaleString('zh-TW',{maximumFractionDigits:0});
 const fmt2 = n => (n==null||isNaN(n))?'-':Number(n).toLocaleString('zh-TW',{minimumFractionDigits:2,maximumFractionDigits:2});
 const pct = n => (n==null||isNaN(n))?'-':(n*100).toLocaleString('zh-TW',{minimumFractionDigits:2,maximumFractionDigits:2})+'%';
+// 年化專用：太短期沒意義、太大就截斷
+function fmtAnnual(annual, days){
+  if (annual == null || isNaN(annual)) return '-';
+  if (days != null && days < 7) return '<span class="sub" title="持有不到 7 天，年化沒意義">—</span>';
+  if (annual > 99.99) return '<span title="實際 ' + (annual*100).toFixed(2) + '%">&gt;9999.99%</span>';
+  if (annual < -0.9999) return '&lt;-99.99%';
+  return pct(annual);
+}
 const cls = n => n>0?'green':(n<0?'red':'sub');
 const $ = sel => document.querySelector(sel);
 const $$ = sel => Array.from(document.querySelectorAll(sel));
@@ -80,8 +88,22 @@ function loadLocal(){
   try { STATE.forecast = JSON.parse(localStorage.getItem('mystock.fc')||'{}') || {}; } catch(e){ STATE.forecast={}; }
   try { STATE.userRecords = JSON.parse(localStorage.getItem('mystock.userRecords')||'[]') || []; } catch(e){ STATE.userRecords=[]; }
   try { STATE.overrides = JSON.parse(localStorage.getItem('mystock.overrides')||'{}') || {}; } catch(e){ STATE.overrides={}; }
+  // 使用者自己新增的標的（不在 Sheets 池內）
+  try { STATE.userCodes = JSON.parse(localStorage.getItem('mystock.userCodes')||'{}') || {}; } catch(e){ STATE.userCodes={}; }
   STATE.lastFetchProxy = localStorage.getItem('mystock.lastFetchProxy') || '';
   STATE.sheetsUrl = localStorage.getItem('mystock.sheetsUrl') || '';
+  // 把使用者自己新增的代碼合併進 code_to_name（讓下拉看得到）
+  mergeUserCodes();
+}
+// 把 STATE.userCodes 合併進 STATE.data.code_to_name
+function mergeUserCodes(){
+  if (!STATE.data || !STATE.data.code_to_name) return;
+  for (const [code, name] of Object.entries(STATE.userCodes || {})){
+    if (!STATE.data.code_to_name[code]) STATE.data.code_to_name[code] = name;
+  }
+}
+function saveUserCodes(){
+  localStorage.setItem('mystock.userCodes', JSON.stringify(STATE.userCodes || {}));
 }
 // 股價只放記憶體，不寫 localStorage
 function savePrices(meta){ if(meta){ STATE.priceMeta = meta; } }
@@ -110,6 +132,8 @@ async function loadFromSheets(){
     json.latest_prices = {};
     STATE.data = json;
     STATE.data.records.forEach((r,i) => { r._id = `xls-${i}`; });
+    // 重新合併使用者自己新增的標的（Sheets 載入會覆蓋 code_to_name）
+    mergeUserCodes();
     // 把目前持股代碼快取到 localStorage（純代碼字串，不含敏感數據）
     // 下次開頁時可以馬上拿來抓價，不必等 Sheets 載入完
     try {
@@ -384,26 +408,55 @@ function renderDashboard(){
       real_sold += a.realized;
     }
   }
+
+  // 算「平均持有天數」：用每筆未賣出買入的成本當權重
+  // 之後拿來年化「未實現」與「總報酬」
+  const today = todayISO();
+  const { lots: allLots } = buildLots();
+  let weightedDays = 0, weightedCost = 0;
+  for (const lot of allLots){
+    if (lot.sell_date) continue;
+    const buyAmt = (lot.buy_price||0) * (lot.units||0);
+    const days = daysBetween(lot.buy_date, today);
+    if (buyAmt > 0 && days > 0){
+      weightedCost += buyAmt;
+      weightedDays += buyAmt * days;
+    }
+  }
+  const avgDays = weightedCost > 0 ? weightedDays / weightedCost : 0;
+  // 年化（複利）：(1+r)^(365/days) - 1。少於 30 天太短不算（避免飆天）
+  const annualize = (r) => (avgDays >= 30 && (1+r) > 0) ? Math.pow(1+r, 365/avgDays) - 1 : null;
+
   $('#kpi-cost').textContent = fmt(cost);
   $('#kpi-value').textContent = fmt(value);
   $('#kpi-unreal').textContent = fmt(unreal);
   $('#kpi-unreal').className='value '+cls(unreal);
-  $('#kpi-unreal-sub').textContent = pct(cost>0?unreal/cost:0);
+  const unrealRet = cost>0?unreal/cost:0;
+  const unrealAnnual = annualize(unrealRet);
+  $('#kpi-unreal-sub').textContent = pct(unrealRet) + (unrealAnnual!=null?`　年化 ${pct(unrealAnnual)}`:'');
   $('#kpi-unreal-sub').className='delta '+cls(unreal);
   $('#kpi-real').textContent = fmt(real);
   $('#kpi-real').className='value '+cls(real);
   // 已實現損益 sub：說明已賣光部分
   $('#kpi-real-sub').textContent = real_sold !== 0 ? `含已賣光 ${fmt(real_sold)}` : '';
   $('#kpi-div').textContent = fmt(divR);
+  // 殖利率（持股部分配息 / 持股成本），再用 avgDays 年化
+  const divYield = cost>0 ? divR_held / cost : 0;
+  const divYieldAnnual = annualize(divYield);
+  const divAnnualText = divYieldAnnual!=null ? `　年化殖利率 ${pct(divYieldAnnual)}` : '';
   $('#kpi-div-sub').textContent = divR_sold !== 0
-    ? `預估未領 ${fmt(divF)}　已賣光 ${fmt(divR_sold)}`
-    : `預估未領 ${fmt(divF)}`;
+    ? `預估未領 ${fmt(divF)}${divAnnualText}　已賣光 ${fmt(divR_sold)}`
+    : `預估未領 ${fmt(divF)}${divAnnualText}`;
   // 總報酬只計入「目前還持有」這些股票的損益：未實現 + 持股期間實現 + 持股的歷史配息
   // 不再加入「已賣光股票」的實現損益和配息（因為分母 cost 不含它們）
   const total = unreal + real_held + divR_held;
   $('#kpi-total').textContent = fmt(total);
   $('#kpi-total').className='value '+cls(total);
-  $('#kpi-total-sub').textContent = pct(cost>0?total/cost:0) + '（持股）';
+  const totalRet = cost>0?total/cost:0;
+  const totalAnnual = annualize(totalRet);
+  $('#kpi-total-sub').textContent = pct(totalRet) + '（持股）'
+    + (totalAnnual!=null ? `　年化 ${pct(totalAnnual)}` : '')
+    + (avgDays > 0 ? `　平均持有 ${avgDays.toFixed(0)} 天` : '');
   $('#kpi-total-sub').className='delta '+cls(total);
   $('#kpi-cost-sub').textContent = `共 ${Object.values(map).filter(a=>a.units>0).length} 檔持股`;
   $('#kpi-value-sub').textContent = (value>cost?'+':'') + fmt(value-cost) + ' vs 成本';
@@ -423,6 +476,44 @@ function drawHoldingsChart(map){
   if (window._holdingsChart) window._holdingsChart.destroy();
   const total = items.reduce((s,a)=>s+a.market,0);
   const colors = ['#4f8cff','#3ddc84','#ffc857','#ff6b6b','#a07cff','#ff8c4f','#7fc1ff','#3dc8c8','#dc8c3d','#9adc3d','#dc3d8c','#3dc88c','#5c5cdc','#ffb45a','#7adc5a','#dc5a7a','#5adcdc','#dc5adc'];
+
+  // 自訂 plugin：>= 10% 的扇形在圓環上標股票名 + 百分比
+  const sliceLabelPlugin = {
+    id: 'sliceLabel',
+    afterDatasetsDraw(chart){
+      const cctx = chart.ctx;
+      const meta = chart.getDatasetMeta(0);
+      const data = chart.data.datasets[0].data;
+      const sum = data.reduce((s,v)=>s+v,0);
+      cctx.save();
+      cctx.font = 'bold 12px -apple-system,"Microsoft JhengHei",sans-serif';
+      cctx.textAlign = 'center';
+      cctx.textBaseline = 'middle';
+      meta.data.forEach((arc, i) => {
+        const v = data[i];
+        const pctVal = sum>0 ? v/sum*100 : 0;
+        if (pctVal < 10) return;
+        const angle = (arc.startAngle + arc.endAngle) / 2;
+        const r = (arc.outerRadius + arc.innerRadius) / 2;
+        const x = arc.x + Math.cos(angle) * r;
+        const y = arc.y + Math.sin(angle) * r;
+        const label = items[i].name;
+        const sub = pctVal.toFixed(1) + '%';
+        // 描邊增加可讀性
+        cctx.lineWidth = 3;
+        cctx.strokeStyle = 'rgba(0,0,0,0.65)';
+        cctx.fillStyle = '#fff';
+        cctx.strokeText(label, x, y - 7);
+        cctx.fillText(label, x, y - 7);
+        cctx.font = '11px -apple-system,"Microsoft JhengHei",sans-serif';
+        cctx.strokeText(sub, x, y + 8);
+        cctx.fillText(sub, x, y + 8);
+        cctx.font = 'bold 12px -apple-system,"Microsoft JhengHei",sans-serif';
+      });
+      cctx.restore();
+    }
+  };
+
   window._holdingsChart = new Chart(ctx, {
     type:'doughnut',
     data:{
@@ -441,7 +532,8 @@ function drawHoldingsChart(map){
           return `${a.name} ${fmtLots(a.units)}: ${fmt(c.raw)} (${(c.raw/total*100).toFixed(1)}%)`;
         }}}
       }
-    }
+    },
+    plugins: [sliceLabelPlugin]
   });
   // 自訂 HTML legend，把張數用 accent-2 色
   const lg = $('#holdingsLegend');
@@ -454,6 +546,7 @@ function drawHoldingsChart(map){
         <span class="legend-name">${a.name} <span class="legend-code">${a.code}</span></span>
         <span class="legend-lots">${p.lots}</span>
         <span class="legend-odd">${p.odd}</span>
+        <span class="legend-market" title="現值">${fmt(a.market)}</span>
         <span class="legend-pct">${(a.market/total*100).toFixed(1)}%</span>
       </div>
     `;}).join('');
@@ -515,7 +608,20 @@ function drawMonthlyChart(canvasId){
   const actuals = filtered.map(k => monthly[k].actual);
   const forecasts = filtered.map(k => monthly[k].forecast);
   const ctx = document.getElementById(canvasId);
+  if (!ctx) return;
   if (window['_chart_'+canvasId]) window['_chart_'+canvasId].destroy();
+
+  const wrap = ctx.parentElement;            // .chart-monthly-wrap
+  const scroller = wrap.parentElement;       // .chart-scroll
+  const frame = scroller.parentElement;      // .chart-monthly-frame
+  const yAxisDiv = frame.querySelector('.chart-yaxis-wrap');
+
+  // 動態決定主畫布寬度：每個月 38px，至少撐滿 scroll 容器
+  const containerW = scroller.clientWidth || 600;
+  const desiredW = Math.max(containerW, labels.length * 38);
+  wrap.style.width = desiredW + 'px';
+
+  // ── 主圖：bar + X 軸（Y 軸標籤隱藏，由旁邊的 HTML div 接手）──
   window['_chart_'+canvasId] = new Chart(ctx, {
     type:'bar',
     data:{labels, datasets:[
@@ -524,16 +630,52 @@ function drawMonthlyChart(canvasId){
     ]},
     options:{
       responsive:true, maintainAspectRatio:false,
+      layout:{ padding:{ left:0, right:8 } },
       scales:{
-        x:{stacked:true, ticks:{color:'#8b96a5', maxRotation:60, minRotation:60, font:{size:10}}, grid:{color:'#2a3340'}},
-        y:{stacked:true, ticks:{color:'#8b96a5', callback:v=>fmt(v)}, grid:{color:'#2a3340'}}
+        x:{stacked:true, ticks:{color:'#8b96a5', maxRotation:60, minRotation:60, font:{size:10}, autoSkip:false}, grid:{color:'#2a3340'}},
+        y:{stacked:true, beginAtZero:true,
+           ticks:{ display:false },                 // 標籤改由 HTML 渲染，避免被切
+           grid:{color:'#2a3340'},
+           border:{ display:false }
+        }
       },
       plugins:{
         legend:{labels:{color:'#e6edf3'}},
         tooltip:{callbacks:{label: c => `${c.dataset.label}: ${fmt(c.raw)}`}}
+      },
+      animation: {
+        // 圖畫完之後讀 Y 軸刻度位置，把對應的 HTML label 放到正確位置
+        onComplete: () => syncYAxisLabels(canvasId, yAxisDiv)
       }
     }
   });
+
+  // resize 時也要重新同步
+  if (!window['_yaxisListener_'+canvasId]){
+    window.addEventListener('resize', () => syncYAxisLabels(canvasId, yAxisDiv));
+    window['_yaxisListener_'+canvasId] = true;
+  }
+  // 第一次先嘗試畫一次，避免 onComplete 未即時觸發
+  setTimeout(() => syncYAxisLabels(canvasId, yAxisDiv), 60);
+
+  // 開啟分頁時自動 scroll 到最右邊（最近的月份）
+  scroller.scrollLeft = scroller.scrollWidth;
+}
+
+// 把主圖的 Y 軸刻度位置同步到旁邊固定的 HTML 標籤欄
+// yAxisDiv 與主圖 canvas 同高（都是 chart-monthly-frame 的 100%），所以可直接用 getPixelForValue
+function syncYAxisLabels(canvasId, yAxisDiv){
+  const chart = window['_chart_'+canvasId];
+  if (!chart || !yAxisDiv) return;
+  const yScale = chart.scales.y;
+  if (!yScale) return;
+  const ticks = yScale.ticks || [];
+  let html = '';
+  for (const t of ticks){
+    const px = yScale.getPixelForValue(t.value);
+    html += `<div class="ytick" style="top:${px}px">${fmt(t.value)}</div>`;
+  }
+  yAxisDiv.innerHTML = html;
 }
 function add12(ym){ const [y,m]=ym.split('-').map(Number); const d=new Date(y, m-1+12, 1); return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,'0')}`; }
 
@@ -668,7 +810,7 @@ function renderTrades(){
       ${sellCells}
       <td class="num ${cls(r.profit||0)}">${r.profit!=null?fmt(r.profit):'-'}</td>
       <td class="num ${cls(r.ret||0)}">${r.ret!=null?pct(r.ret):'-'}</td>
-      <td class="num ${cls(r.annual||0)}">${r.annual!=null?pct(r.annual):'-'}</td>
+      <td class="num ${cls(r.annual||0)}">${fmtAnnual(r.annual, r.days)}</td>
       <td>${editBtn}</td>`;
     tb.appendChild(tr);
   }
@@ -959,53 +1101,12 @@ function renderAnnual(){
 }
 
 // ---------- 股價 ----------
+// 「股價更新」分頁已移除；這個函式現在只更新 dashboard 的「上次更新時間」
 function renderPrices(){
-  // 更新「上次更新時間」（總覽 + 股價更新分頁同步顯示）
   const updateInfo = (STATE.priceMeta && STATE.priceMeta.updatedAt)
     ? `上次更新：${STATE.priceMeta.updatedAt}（${STATE.priceMeta.source && (STATE.priceMeta.source.startsWith('twse')||STATE.priceMeta.source.startsWith('gas'))?'自動抓取':'手動輸入'}）`
     : '';
-  if ($('#priceUpdateInfo')) $('#priceUpdateInfo').textContent = updateInfo;
   if ($('#dashPriceUpdateInfo')) $('#dashPriceUpdateInfo').textContent = updateInfo;
-
-  const root = $('#priceGrid');
-  if (!root) return;
-  root.innerHTML='';
-  const codes = heldCodes();
-  $('#priceCount').textContent = `共 ${codes.length} 檔現持股`;
-  for (const c of codes){
-    const name = STATE.data.code_to_name[c];
-    const p = STATE.prices[c] ?? '';
-    const div = document.createElement('div');
-    div.className='row';
-    div.innerHTML = `<div><div class="name">${name}</div><div class="code">${c}</div></div>
-                     <input type="number" step="0.01" data-code="${c}" value="${p}">`;
-    root.appendChild(div);
-  }
-  root.querySelectorAll('input').forEach(inp => {
-    inp.addEventListener('change', e => {
-      const c = e.target.dataset.code;
-      const v = parseFloat(e.target.value);
-      if (!isNaN(v) && v>0) STATE.prices[c] = v;
-      else delete STATE.prices[c];
-      savePrices({updatedAt: new Date().toISOString().slice(0,16).replace('T',' '), source:'manual'});
-      renderAll();
-    });
-  });
-  $('#resetPrices').onclick = () => {
-    if (!confirm('清空所有股價，等下次 GAS 更新？')) return;
-    STATE.prices = {};
-    savePrices({updatedAt:'', source:''});
-    renderPrices();
-    renderAll();
-  };
-  $('#recalc').onclick = () => renderAll();
-  if ($('#fetchPrices')) $('#fetchPrices').onclick = () => fetchTwsePrices('yesterday');
-  if ($('#fetchPricesLive')) $('#fetchPricesLive').onclick = () => fetchTwsePrices('live');
-  if ($('#fetchPricesOpenAPI')) $('#fetchPricesOpenAPI').onclick = fetchTwseOpenAPI;
-  if ($('#pastePricesBtn')) $('#pastePricesBtn').onclick = pastePricesJson;
-  if ($('#fetchPricesGASLive')) $('#fetchPricesGASLive').onclick = () => fetchPricesViaGAS('live');
-  if ($('#fetchPricesGAS')) $('#fetchPricesGAS').onclick = () => fetchPricesViaGAS('yesterday');
-  if ($('#dashFetchPricesGASLive')) $('#dashFetchPricesGASLive').onclick = () => fetchPricesViaGAS('live');
 }
 
 
@@ -1264,6 +1365,52 @@ function renderAddTab(){
     if (cur) sel.value = cur;
   };
   ['#buyStock','#divStockNew','#sdStockNew'].forEach(s => fillCodes($(s)));
+
+  // 「新增其他標的」UI
+  const toggleBtn = $('#toggleAddStock');
+  const box = $('#addStockBox');
+  if (toggleBtn && box){
+    toggleBtn.onclick = () => {
+      box.hidden = !box.hidden;
+      if (!box.hidden){ $('#newStockCode').focus(); }
+    };
+    $('#cancelAddStock').onclick = () => {
+      box.hidden = true;
+      $('#newStockCode').value = ''; $('#newStockName').value = '';
+      $('#addStockMsg').textContent = '';
+    };
+    $('#addStockBtn').onclick = () => {
+      const code = ($('#newStockCode').value || '').trim();
+      const name = ($('#newStockName').value || '').trim();
+      const msg = $('#addStockMsg');
+      if (!code){ msg.textContent='請填代碼'; msg.className='small red'; return; }
+      if (!name){ msg.textContent='請填名稱'; msg.className='small red'; return; }
+      if (!STATE.userCodes) STATE.userCodes = {};
+      STATE.userCodes[code] = name;
+      saveUserCodes();
+      mergeUserCodes();
+      // 重新填三個下拉，讓使用者其他表單也看得到新標的
+      const codes2 = Object.keys(STATE.data.code_to_name).sort();
+      ['#buyStock','#divStockNew','#sdStockNew'].forEach(sel => {
+        const el = $(sel); if (!el) return;
+        const cur = el.value;
+        el.innerHTML = '';
+        for (const c of codes2){
+          const o = document.createElement('option');
+          o.value = c; o.textContent = `${c} ${STATE.data.code_to_name[c]||''}`;
+          el.appendChild(o);
+        }
+        el.value = (sel==='#buyStock') ? code : (cur || code);
+      });
+      msg.textContent = `✔ 已加入 ${code} ${name}`;
+      msg.className = 'small green';
+      $('#newStockCode').value = ''; $('#newStockName').value = '';
+      // 觸發買進參考重畫（換到新代碼）
+      renderBuyReference();
+      // 1.2 秒後自動收起
+      setTimeout(() => { box.hidden = true; msg.textContent = ''; }, 1500);
+    };
+  }
 
   const today = todayISO();
   ['#buyDate','#sellDate'].forEach(s => { if ($(s) && !$(s).value) $(s).value = today; });
@@ -1647,13 +1794,17 @@ function renderSettings(){
   };
   $('#clearAll').onclick = () => {
     if (!confirm('將清除：密碼、自訂股價、手續費、預估參數、新增交易、覆寫。要繼續嗎？')) return;
-    ['mystock.pwHash','mystock.prices','mystock.priceMeta','mystock.fee','mystock.fc','mystock.userRecords','mystock.overrides'].forEach(k => localStorage.removeItem(k));
+    ['mystock.pwHash','mystock.prices','mystock.priceMeta','mystock.fee','mystock.fc','mystock.userRecords','mystock.overrides','mystock.userCodes','mystock.heldCodes'].forEach(k => localStorage.removeItem(k));
     location.reload();
   };
 }
 
 // ---------- Tabs ----------
 function bindTabs(){
+  // 總覽分頁的「⚡ GAS 即時更新股價」按鈕（之前是在 renderPrices 內綁定）
+  if ($('#dashFetchPricesGASLive')){
+    $('#dashFetchPricesGASLive').onclick = () => fetchPricesViaGAS('live');
+  }
   $$('#nav button').forEach(b => {
     b.onclick = () => {
       $$('#nav button').forEach(x=>x.classList.remove('active'));
@@ -1666,7 +1817,6 @@ function bindTabs(){
       else if (tab==='dividends') renderDividends();
       else if (tab==='monthly') renderMonthly();
       else if (tab==='annual') renderAnnual();
-      else if (tab==='prices') renderPrices();
       else if (tab==='add') renderAddTab();
       else if (tab==='settings') renderSettings();
     };
