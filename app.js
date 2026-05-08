@@ -110,11 +110,25 @@ async function loadFromSheets(){
     json.latest_prices = {};
     STATE.data = json;
     STATE.data.records.forEach((r,i) => { r._id = `xls-${i}`; });
+    // 把目前持股代碼快取到 localStorage（純代碼字串，不含敏感數據）
+    // 下次開頁時可以馬上拿來抓價，不必等 Sheets 載入完
+    try {
+      const codes = heldCodes();
+      if (codes.length) localStorage.setItem('mystock.heldCodes', JSON.stringify(codes));
+    } catch(e){}
     return true;
   } catch(e){
     console.warn('Sheets 載入失敗，使用 data.js:', e);
     return false;
   }
+}
+
+// 從 localStorage 拿上次的持股代碼（用於開頁時的快速抓價）
+function loadCachedHeldCodes(){
+  try {
+    const arr = JSON.parse(localStorage.getItem('mystock.heldCodes') || '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch(e){ return []; }
 }
 
 // ---------- 計算 ----------
@@ -1075,14 +1089,15 @@ async function pastePricesJson(){
 
 
 // 透過 Google Apps Script 抓股價（不靠 CORS proxy，最穩）
-async function fetchPricesViaGAS(mode){
+// overrideCodes：可選；若有提供就用它而不是 heldCodes()。
+//                用途：開頁時用快取代碼立刻抓，不用等 Sheets 載入完。
+async function fetchPricesViaGAS(mode, overrideCodes){
   if (!STATE.sheetsUrl){ alert('請先到「設定」貼上 Apps Script URL'); return; }
   // 同時鎖兩顆 GAS 按鈕（不論點哪一個都顯示中）
   const btns = [
     mode==='live' ? $('#fetchPricesGASLive') : $('#fetchPricesGAS'),
     $('#dashFetchPricesGASLive'),
   ].filter(Boolean);
-  if (btns.length === 0) return;
   const origs = btns.map(b => b.textContent);
   btns.forEach((b,i) => { b.disabled = true; b.textContent = '抓取中…'; });
   const statusEls = [$('#fetchStatus'), $('#dashFetchStatus')].filter(Boolean);
@@ -1091,7 +1106,7 @@ async function fetchPricesViaGAS(mode){
 
   const restore = () => btns.forEach((b,i) => { b.disabled = false; b.textContent = origs[i]; });
 
-  const codes = heldCodes();
+  const codes = (overrideCodes && overrideCodes.length) ? overrideCodes : heldCodes();
   if (codes.length === 0){
     setStatus('<span class="sub">目前沒有持股</span>');
     restore();
@@ -1697,6 +1712,16 @@ async function initApp(){
       console.log('已從網址自動載入 Sheets URL');
     }
   }
+
+  // 讓抓 Sheets 跟抓股價同時並行，這樣不用等 Sheets 載入完才開始抓價
+  // 若有上次快取的代碼就直接用，否則等 Sheets 載完再抓
+  let pricesPromise = Promise.resolve();
+  const cachedCodes = loadCachedHeldCodes();
+  if (STATE.sheetsUrl && cachedCodes.length){
+    // 馬上用快取代碼開始抓，不必等 Sheets
+    pricesPromise = fetchPricesViaGAS('live', cachedCodes).catch(e => console.warn('抓價失敗', e));
+  }
+
   if (STATE.sheetsUrl){
     const ok = await loadFromSheets();
     if (ok) console.log('已從 Google Sheets 載入');
@@ -1705,11 +1730,9 @@ async function initApp(){
   bindTabs();
   renderAll();
 
-  // 開頁時自動抓一次最新股價，之後就靠使用者手動點按鈕
-  if (STATE.sheetsUrl){
-    setTimeout(() => {
-      try { fetchPricesViaGAS('live'); } catch(e){ console.warn('自動抓價失敗', e); }
-    }, 300);
+  // 沒有快取代碼（第一次用）→ Sheets 載完才抓
+  if (STATE.sheetsUrl && !cachedCodes.length){
+    pricesPromise = fetchPricesViaGAS('live').catch(e => console.warn('抓價失敗', e));
   }
 }
 
