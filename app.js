@@ -335,17 +335,25 @@ function adjustedDividend(d){
   return d.dividend;
 }
 
-function buildHoldings(){
+// period：可選，{from:'YYYY-MM-DD', to:'YYYY-MM-DD'}（含端點）。
+//   有提供時：只計入這段期間「買進」的批次；那些批次後來的賣出 / 收到的配息照算
+//   沒提供時：跟以前一樣，全部累計
+function buildHoldings(period){
   const { lots, dividends, stockDivs } = buildLots();
   const map = {};
   const ensure = (code, name) => {
     if(!map[code]) map[code] = { code, name, units:0, cost:0, divReceived:0, divForecast:0, realized:0, buyUnitsTotal:0, buyCostTotal:0, sellLots:0 };
     return map[code];
   };
+  // 篩出「期間內買進」的批次代碼集合（給配息/配股使用：那些股票才算）
+  const codeInPeriod = new Set();
   for (const lot of lots){
+    if (period){
+      if (!lot.buy_date || lot.buy_date < period.from || lot.buy_date > period.to) continue;
+      codeInPeriod.add(lot.code);
+    }
     const e = enrichLot(lot);
     const a = ensure(e.code, e.name);
-    // 用「成交價 × 股數」當成本（跟 Excel 一致，不含買進手續費）
     a.buyCostTotal += e.buyAmt;
     a.buyUnitsTotal += e.units||0;
     if (e.status==='realized'){ a.realized += e.profit||0; a.sellLots += 1; }
@@ -353,11 +361,11 @@ function buildHoldings(){
   }
   const today = todayISO();
   for (const sd of stockDivs){
+    if (period && !codeInPeriod.has(sd.code)) continue;  // 期間模式：只算「期間內買進的股票」配股
     const a = ensure(sd.code, sd.name);
-    // 未來配股（除權日未到）不計入「目前持股」，但記錄供顯示
     const sdDate = sd.ex_date || sd.buy_date;
     if (sdDate && sdDate > today){
-      a.futureStockDivUnits = (a.futureStockDivUnits||0) + (sd.units||0);
+      if (!period) a.futureStockDivUnits = (a.futureStockDivUnits||0) + (sd.units||0);
       continue;
     }
     a.units += sd.units||0;
@@ -365,6 +373,7 @@ function buildHoldings(){
     a.stockDivUnits = (a.stockDivUnits||0) + (sd.units||0);
   }
   for (const d of dividends){
+    if (period && !codeInPeriod.has(d.code)) continue;
     const a = ensure(d.code, d.name);
     const amt = adjustedDividend(d) || 0;
     if (d.buy_date && d.buy_date <= today) a.divReceived += amt;
@@ -377,9 +386,9 @@ function buildHoldings(){
     a.market = a.cur!=null ? a.cur * a.units : null;
     a.unreal = a.market!=null ? a.market - a.cost : null;
     a.unrealPct = (a.unreal!=null && a.cost>0) ? a.unreal/a.cost : null;
-    a.profitNoDiv = (a.unreal||0) + a.realized;          // 不含配息：純價差
+    a.profitNoDiv = (a.unreal||0) + a.realized;
     a.retNoDiv = a.buyCostTotal>0 ? a.profitNoDiv / a.buyCostTotal : null;
-    a.totalProfit = a.profitNoDiv + a.divReceived;          // 含配息
+    a.totalProfit = a.profitNoDiv + a.divReceived;
     a.totalRet = a.buyCostTotal>0 ? a.totalProfit / a.buyCostTotal : null;
     a.divYield = a.buyCostTotal>0 ? a.divReceived / a.buyCostTotal : null;
   }
@@ -682,11 +691,74 @@ function add12(ym){ const [y,m]=ym.split('-').map(Number); const d=new Date(y, m
 // ---------- 持股 ----------
 let _holdingsSort = {key:'market', dir:-1};
 let _holdingsWhoOverride = '';   // ''=依頂端, 'all', '我', 'Max'
+let _holdingsPeriod = '';        // ''=全部時間, 'YYYY' 或 'YYYY-MM'
+
+// 把期間下拉填好（年 + 月，根據資料的時間範圍）
+function populateCutoffSelect(){
+  const sel = $('#holdingsCutoff');
+  if (!sel) return;
+  if (sel.options.length > 1) return;
+  const records = (STATE.data && STATE.data.records) || [];
+  const dates = records.map(r => r.buy_date).filter(Boolean).sort();
+  if (dates.length === 0) return;
+  const firstYear = parseInt(dates[0].slice(0,4));
+  const today = todayISO();
+  const thisYear = parseInt(today.slice(0,4));
+  const thisMonth = today.slice(0,7);
+  // 各年（從新到舊）
+  for (let y = thisYear; y >= firstYear; y--){
+    const opt = document.createElement('option');
+    opt.value = String(y);
+    opt.textContent = `${y} 年買進`;
+    sel.appendChild(opt);
+  }
+  // 最近 24 個月
+  const sep = document.createElement('option');
+  sep.disabled = true; sep.textContent = '──── 各月買進 ────';
+  sel.appendChild(sep);
+  const dt = new Date();
+  for (let i = 0; i < 24; i++){
+    const y = dt.getFullYear(), m = dt.getMonth();
+    const ym = `${y}-${String(m+1).padStart(2,'0')}`;
+    if (ym <= thisMonth){
+      const opt = document.createElement('option');
+      opt.value = ym;
+      opt.textContent = `${ym} 買進`;
+      sel.appendChild(opt);
+    }
+    dt.setMonth(m - 1);
+  }
+}
+
+// 把 'YYYY' / 'YYYY-MM' 轉成 {from, to}
+function periodFromKey(key){
+  if (!key) return null;
+  if (/^\d{4}$/.test(key)) return { from:`${key}-01-01`, to:`${key}-12-31` };
+  if (/^\d{4}-\d{2}$/.test(key)){
+    const [y,m] = key.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    return { from:`${key}-01`, to:`${key}-${String(lastDay).padStart(2,'0')}` };
+  }
+  return null;
+}
+
 function renderHoldings(){
+  populateCutoffSelect();
   const origWho = STATE.who;
   if (_holdingsWhoOverride) STATE.who = _holdingsWhoOverride;
-  const map = buildHoldings();
+  const period = periodFromKey(_holdingsPeriod);
+  const map = buildHoldings(period);
   STATE.who = origWho;
+  // 期間模式提示
+  const note = $('#holdingsCutoffNote');
+  if (note){
+    if (period){
+      note.style.display = '';
+      note.textContent = `📅 只看「${_holdingsPeriod} 內買進」的標的，現價/市值用今日報價`;
+    } else {
+      note.style.display = 'none';
+    }
+  }
   const hideEmpty = $('#hideEmpty').checked;
   let rows = Object.values(map);
   if (hideEmpty) rows = rows.filter(a=>a.units>0);
@@ -1834,6 +1906,7 @@ function bindTabs(){
   });
   $('#hideEmpty').onchange = renderHoldings;
   const hw = $('#holdingsWho'); if (hw) hw.onchange = e => { _holdingsWhoOverride = e.target.value; renderHoldings(); };
+  const hc = $('#holdingsCutoff'); if (hc) hc.onchange = e => { _holdingsPeriod = e.target.value; renderHoldings(); };
   $$('#tradeStock,#tradeStatus').forEach(s => s.onchange = renderTrades);
   $$('#divStock,#divYear,#divKind').forEach(s => s.onchange = renderDividends);
   // 登出按鈕已移除（因為登入也移除了）

@@ -89,7 +89,8 @@
   .chart-yaxis-wrap{flex:0 0 64px;height:100%;position:relative;border-right:1px solid #2a3340}
   .chart-yaxis-wrap .ytick{position:absolute;right:6px;font-size:10px;color:#8b96a5;line-height:1;font-variant-numeric:tabular-nums;white-space:nowrap;transform:translateY(-50%)}
   .chart-scroll{flex:1;overflow-x:auto;overflow-y:hidden;-webkit-overflow-scrolling:touch;min-width:0}
-  .chart-monthly-wrap{height:100% !important;width:auto}  /* 由 JS 設 px 寬 */
+  /* 月配息圖的 wrap：高度填滿 frame，寬度由 JS 動態設（每月 38px） */
+  .chart-monthly-wrap{position:relative;height:100%;width:auto;display:block}
   .chart-scroll::-webkit-scrollbar{height:8px}
   .chart-scroll::-webkit-scrollbar-thumb{background:#3a4350;border-radius:4px}
   .holdings-layout{display:flex;gap:18px;align-items:center;flex-wrap:wrap}
@@ -171,7 +172,8 @@
 
     /* 表格：橫向捲動，固定高度收一點 */
     .scroll{max-height:60vh}
-    table{font-size:12px;min-width:560px}  /* 強制橫向 scroll 而不擠壓 */
+    table{font-size:12px}
+    .scroll table{min-width:560px}  /* 大資料表強制橫向 scroll 而不擠壓；表單內的小表格不受限 */
     table thead th{padding:8px 6px;font-size:11px}
     table tbody td{padding:7px 6px}
     .inline-date{width:110px;font-size:12px}
@@ -281,7 +283,7 @@
 
       <div class="panel">
         <h3>每月配息（含預估）</h3>
-        <div class="chart-monthly-frame"><div class="chart-yaxis-wrap" id="chartMonthly_y"></div><div class="chart-scroll"><div class="chart-wrap chart-monthly-wrap"><canvas id="chartMonthly"></canvas></div></div></div>
+        <div class="chart-monthly-frame"><div class="chart-yaxis-wrap" id="chartMonthly_y"></div><div class="chart-scroll"><div class="chart-monthly-wrap"><canvas id="chartMonthly"></canvas></div></div></div>
       </div>
     </section>
 
@@ -294,7 +296,8 @@
           <option value="我">只看 我</option>
           <option value="Max">只看 Max</option>
         </select>
-        <span class="small">點欄位 header 切換排序　·　取消勾選「隱藏無持股」可看已賣光的股票　·　<b style="color:var(--accent-2)">總計列的「已收配息／已實現／含息／不含息」永遠包含已賣光的股票</b>（與「總覽」KPI 一致）</span>
+        <select id="holdingsCutoff" title="顯示截至某時點的快照"><option value="">⌚ 目前</option></select>
+        <span class="small" id="holdingsCutoffNote" style="color:var(--yellow);display:none">⚠ 快照模式：現價/市值/未實現 因無歷史股價而留白</span>
         <span style="flex:1"></span>
         <label class="small"><input type="checkbox" id="hideEmpty" checked /> 隱藏無持股</label>
       </div>
@@ -386,7 +389,7 @@
       </div>
       <div class="panel">
         <h3>每月配息收入</h3>
-        <div class="chart-monthly-frame" style="height:340px"><div class="chart-yaxis-wrap" id="chartMonthly2_y"></div><div class="chart-scroll"><div class="chart-wrap chart-monthly-wrap"><canvas id="chartMonthly2"></canvas></div></div></div>
+        <div class="chart-monthly-frame" style="height:340px"><div class="chart-yaxis-wrap" id="chartMonthly2_y"></div><div class="chart-scroll"><div class="chart-monthly-wrap"><canvas id="chartMonthly2"></canvas></div></div></div>
       </div>
       <div class="panel">
         <h3>年度匯總</h3>

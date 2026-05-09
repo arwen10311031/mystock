@@ -219,14 +219,15 @@ function jsonOut(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
+// 用「試算表的時區」來格式化日期，避免 Apps Script 預設時區與試算表不同造成日期 -1 天
+// （例如試算表是 Asia/Taipei，但 script 是 Etc/GMT 時，4/1 會變成 3/31）
 function fmtDate(d) {
   if (!d) return null;
   if (typeof d === 'string') return d.length >= 10 ? d.substring(0,10) : null;
   if (d instanceof Date) {
-    const yyyy = d.getFullYear();
-    const mm = String(d.getMonth()+1).padStart(2,'0');
-    const dd = String(d.getDate()).padStart(2,'0');
-    return `${yyyy}-${mm}-${dd}`;
+    var tz;
+    try { tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(); } catch (e) { tz = 'Asia/Taipei'; }
+    return Utilities.formatDate(d, tz || 'Asia/Taipei', 'yyyy-MM-dd');
   }
   return null;
 }
