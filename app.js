@@ -413,7 +413,18 @@ function buildHoldings(period){
   for (const code of Object.keys(map)){
     const a = map[code];
     a.avg = a.units>0 ? a.cost / a.units : 0;
-    a.cur = STATE.prices[code];
+    const fetched = STATE.prices[code];
+    // 抓不到報價時，用「均價」當現價的 fallback（目前現值至少含成本，未實現顯示為 0）
+    if (fetched != null && fetched > 0){
+      a.cur = fetched;
+      a.priceFallback = false;
+    } else if (a.units > 0 && a.avg > 0){
+      a.cur = a.avg;
+      a.priceFallback = true;     // 標記：這檔的現價是用均價 fallback
+    } else {
+      a.cur = null;
+      a.priceFallback = false;
+    }
     a.market = a.cur!=null ? a.cur * a.units : null;
     a.unreal = a.market!=null ? a.market - a.cost : null;
     a.unrealPct = (a.unreal!=null && a.cost>0) ? a.unreal/a.cost : null;
@@ -821,7 +832,7 @@ function renderHoldings(){
       <td class="num ${(a.stockDivUnits||0)>0?'':'sub'}">${(a.stockDivUnits||0)>0?fmt(a.stockDivUnits):'-'}${(a.futureStockDivUnits||0)>0?` <span class="badge etf" title="除權日未到，尚未計入持股">+${fmt(a.futureStockDivUnits)}未到</span>`:''}</td>
       <td class="num">${a.units>0?fmt2(a.avg):'-'}</td>
       <td class="num">${fmt(a.cost)}</td>
-      <td class="num">${a.cur!=null?fmt2(a.cur):'-'}</td>
+      <td class="num"${a.priceFallback?' style="color:var(--yellow)" title="GAS 抓不到報價，用均價代替"':''}>${a.cur!=null?fmt2(a.cur):'-'}${a.priceFallback?' ⚠':''}</td>
       <td class="num">${a.market!=null?fmt(a.market):'-'}</td>
       <td class="num ${cls(a.unreal||0)}">${a.unreal!=null?fmt(a.unreal):'-'}</td>
       <td class="num ${cls(a.unrealPct||0)}">${a.unrealPct!=null?pct(a.unrealPct):'-'}</td>
@@ -1332,9 +1343,14 @@ async function fetchPricesViaGAS(mode, overrideCodes){
       return;
     }
     Object.assign(STATE.prices, json.prices);
+    // 記下哪些是從 cache 拿的（昨天/前天的價，不是即時）
+    STATE.priceFromCache = new Set(json.from_cache || []);
     const dateStr = json.price_date || new Date().toISOString().slice(0,10);
     savePrices({updatedAt: dateStr + ' ' + new Date().toTimeString().slice(0,5), source: mode==='live'?'gas-live':(mode==='yesterday'?'gas-yest':'gas')});
-    setStatus(`<span class="green">✔ GAS 抓到 ${got}/${json.total} 檔 (報價日 ${dateStr})</span>${json.missing && json.missing.length?` 缺：${json.missing.join(', ')}`:''}`);
+    const cachedNote = (json.from_cache && json.from_cache.length)
+      ? ` 　🗃 ${json.from_cache.join(',')} 用上次 cache`
+      : '';
+    setStatus(`<span class="green">✔ GAS 抓到 ${got}/${json.total} 檔 (報價日 ${dateStr})</span>${json.missing && json.missing.length?` 缺：${json.missing.join(', ')}`:''}${cachedNote}`);
     renderPrices();
     renderAll();
   } catch(e){

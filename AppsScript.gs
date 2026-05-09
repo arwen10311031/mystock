@@ -82,6 +82,7 @@ function doFetchPrices(e) {
 
   const updates = {};
   const found = new Set();
+  const fromCache = new Set();   // 哪些是從 cache 拿的（標出來給前端知道）
   let priceDate = '';
   const errors = [];
 
@@ -117,6 +118,22 @@ function doFetchPrices(e) {
     } catch (err) { errors.push('openapi: ' + err.message); }
   }
 
+  // 把今天抓到的存進 cache（PropertiesService 永久保存）
+  try { savePriceCache(updates, priceDate || ''); } catch (err) { errors.push('cache-save: ' + err.message); }
+
+  // 還沒抓到的，從 cache 撈上次成功的值（昨天/前天的價格）
+  const stillMissing = codes.filter(c => !found.has(c));
+  if (stillMissing.length > 0) {
+    const cached = loadPriceCache(stillMissing);
+    for (const c of stillMissing) {
+      if (cached[c] != null) {
+        updates[c] = cached[c].price;
+        found.add(c);
+        fromCache.add(c);
+      }
+    }
+  }
+
   if (priceDate && priceDate.length === 8) {
     priceDate = priceDate.substring(0,4) + '-' + priceDate.substring(4,6) + '-' + priceDate.substring(6,8);
   }
@@ -124,6 +141,7 @@ function doFetchPrices(e) {
   return jsonOut({
     prices: updates,
     price_date: priceDate || new Date().toISOString().slice(0,10),
+    from_cache: Array.from(fromCache),
     found_count: Object.keys(updates).length,
     total: codes.length,
     missing: codes.filter(c => !found.has(c)),
@@ -217,6 +235,37 @@ function jsonOut(obj) {
   return ContentService
     .createTextOutput(JSON.stringify(obj))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ─── 價格 cache（PropertiesService 永久保存）──────────────────
+// 把每次成功抓到的股價存起來，下次如果某些代碼抓不到就用上次的值
+// PropertiesService 每個 property 上限 9KB、整個 script 500KB，存幾百檔股價沒問題
+function savePriceCache(updates, priceDate) {
+  if (!updates) return;
+  const props = PropertiesService.getScriptProperties();
+  const items = {};
+  for (const code in updates) {
+    const p = updates[code];
+    if (p == null || isNaN(p) || p <= 0) continue;
+    items['lp_' + code] = JSON.stringify({ price: p, date: priceDate || '', ts: Date.now() });
+  }
+  if (Object.keys(items).length > 0) props.setProperties(items, false);
+}
+
+function loadPriceCache(codes) {
+  const props = PropertiesService.getScriptProperties();
+  const result = {};
+  for (const code of codes) {
+    const v = props.getProperty('lp_' + code);
+    if (!v) continue;
+    try {
+      const obj = JSON.parse(v);
+      if (obj && typeof obj.price === 'number' && obj.price > 0) {
+        result[code] = obj;
+      }
+    } catch (e) {}
+  }
+  return result;
 }
 
 // 把試算表裡各種可能的日期格式都正規化成 'YYYY-MM-DD'
