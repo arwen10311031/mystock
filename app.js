@@ -119,6 +119,31 @@ function showApp(){
 }
 
 
+// 把各種日期格式正規化成 'YYYY-MM-DD'（前端最後一道防線；理想是 Apps Script fmtDate 已處理）
+function normalizeDate(v){
+  if (v == null || v === '') return null;
+  if (typeof v === 'string'){
+    const s = v.trim();
+    let m = s.match(/^(\d{4})\D(\d{1,2})\D(\d{1,2})/);
+    if (m) return m[1] + '-' + String(m[2]).padStart(2,'0') + '-' + String(m[3]).padStart(2,'0');
+    // 民國年
+    m = s.match(/^(\d{2,3})\D(\d{1,2})\D(\d{1,2})/);
+    if (m){ const r = parseInt(m[1],10); if (r>0 && r<200) return (r+1911) + '-' + String(m[2]).padStart(2,'0') + '-' + String(m[3]).padStart(2,'0'); }
+    const t = Date.parse(s);
+    if (!isNaN(t)){
+      const d = new Date(t);
+      return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+    }
+    return null;
+  }
+  if (typeof v === 'number' && v > 1 && v < 100000){
+    const ms = (v - 25569) * 86400000;
+    const d = new Date(ms);
+    return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+  }
+  return null;
+}
+
 // 從 Google Apps Script Web App 載入資料（取代 data.js）
 async function loadFromSheets(){
   const url = STATE.sheetsUrl;
@@ -131,7 +156,13 @@ async function loadFromSheets(){
     // 不再保留 data.js 的 latest_prices；股價由 GAS 即時抓
     json.latest_prices = {};
     STATE.data = json;
-    STATE.data.records.forEach((r,i) => { r._id = `xls-${i}`; });
+    // 確保所有日期欄位都正規化成 YYYY-MM-DD（防範 Apps Script 沒處理乾淨的 case）
+    STATE.data.records.forEach((rec,i) => {
+      rec._id = `xls-${i}`;
+      rec.buy_date = normalizeDate(rec.buy_date);
+      rec.sell_date = normalizeDate(rec.sell_date);
+      rec.ex_date = normalizeDate(rec.ex_date);
+    });
     // 重新合併使用者自己新增的標的（Sheets 載入會覆蓋 code_to_name）
     mergeUserCodes();
     // 把目前持股代碼快取到 localStorage（純代碼字串，不含敏感數據）
@@ -754,12 +785,13 @@ function renderHoldings(){
   if (note){
     if (period){
       note.style.display = '';
-      note.textContent = `📅 只看「${_holdingsPeriod} 內買進」的標的，現價/市值用今日報價`;
+      note.textContent = `📅 只看「${_holdingsPeriod} 內買進」的標的（含已賣光的），現價/市值用今日報價`;
     } else {
       note.style.display = 'none';
     }
   }
-  const hideEmpty = $('#hideEmpty').checked;
+  // 期間模式時自動關掉「隱藏無持股」（因為期間內買的可能已經全賣，仍要看到）
+  const hideEmpty = period ? false : $('#hideEmpty').checked;
   let rows = Object.values(map);
   if (hideEmpty) rows = rows.filter(a=>a.units>0);
   rows.sort((a,b)=>{

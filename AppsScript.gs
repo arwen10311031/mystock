@@ -219,16 +219,59 @@ function jsonOut(obj) {
     .setMimeType(ContentService.MimeType.JSON);
 }
 
-// 用「試算表的時區」來格式化日期，避免 Apps Script 預設時區與試算表不同造成日期 -1 天
-// （例如試算表是 Asia/Taipei，但 script 是 Etc/GMT 時，4/1 會變成 3/31）
+// 把試算表裡各種可能的日期格式都正規化成 'YYYY-MM-DD'
+//   - Date 物件：用試算表時區格式化（避免時區漂移）
+//   - 數字（Excel/Sheets serial number）：例如 45718 → 2025-03-12
+//   - 字串：'2026-3-3', '2026/3/3', '2026.3.3', '2026年3月3日' 等都接
+//   - 其他：用 Date.parse 試試
+function _ssTz_(){
+  try { return SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || 'Asia/Taipei'; }
+  catch (e) { return 'Asia/Taipei'; }
+}
+function _pad2_(n){ n = String(n); return n.length < 2 ? '0' + n : n; }
 function fmtDate(d) {
-  if (!d) return null;
-  if (typeof d === 'string') return d.length >= 10 ? d.substring(0,10) : null;
+  if (d == null || d === '') return null;
+
+  // Date 物件
   if (d instanceof Date) {
-    var tz;
-    try { tz = SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone(); } catch (e) { tz = 'Asia/Taipei'; }
-    return Utilities.formatDate(d, tz || 'Asia/Taipei', 'yyyy-MM-dd');
+    if (isNaN(d.getTime())) return null;
+    return Utilities.formatDate(d, _ssTz_(), 'yyyy-MM-dd');
   }
+
+  // 數字 → 視為 Sheets serial number（自 1899-12-30 起算）
+  if (typeof d === 'number'){
+    if (d > 1 && d < 100000){
+      // 25569 = 1899-12-30 到 1970-01-01 的天數差
+      var ms = (d - 25569) * 86400000;
+      var dt = new Date(ms);
+      return Utilities.formatDate(dt, _ssTz_(), 'yyyy-MM-dd');
+    }
+    return null;
+  }
+
+  // 字串：抓出年月日
+  if (typeof d === 'string'){
+    var s = d.trim();
+    if (!s) return null;
+    // 常見格式：YYYY-M-D / YYYY/M/D / YYYY.M.D / YYYY年M月D日
+    var m = s.match(/^(\d{4})\D(\d{1,2})\D(\d{1,2})/);
+    if (m) return m[1] + '-' + _pad2_(m[2]) + '-' + _pad2_(m[3]);
+    // 民國年：114/03/03 → 2025-03-03
+    m = s.match(/^(\d{2,3})\D(\d{1,2})\D(\d{1,2})/);
+    if (m){
+      var roc = parseInt(m[1], 10);
+      if (roc > 0 && roc < 200){
+        return (roc + 1911) + '-' + _pad2_(m[2]) + '-' + _pad2_(m[3]);
+      }
+    }
+    // 最後 fallback：交給 Date.parse
+    var t = Date.parse(s);
+    if (!isNaN(t)){
+      return Utilities.formatDate(new Date(t), _ssTz_(), 'yyyy-MM-dd');
+    }
+    return null;
+  }
+
   return null;
 }
 
