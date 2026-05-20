@@ -1,12 +1,11 @@
-/* 個人投資紀錄 v1.2
-   localStorage：
-   - mystock.fee          : { feeRate, feeMin, taxStock, taxEtf }
-   - mystock.fc           : { code: { perShare, freq, startMonth, enabled } }
-   - mystock.userRecords  : [{ ...record, _id: 'user-xxx' }]
-   - mystock.overrides    : { _id: { sell_date, sell_price, ...其他可覆寫欄位 } }
-   - mystock.sheetsUrl    : Apps Script URL
-   - mystock.lastFetchProxy : 上次成功的 CORS proxy
-   ※ 股價、報價時間、密碼皆不持久化（避免不同裝置看到不同快取）
+/* 個人投資紀錄 v1.4
+   - SHEETS_URL：寫死在下方常數
+   - FEE：手續費 / 證交稅率寫死
+   - 「➕ 新增」直接寫進 Google Sheets（透過 Apps Script doPost），不再存 localStorage
+   - 仍存 localStorage 的：
+     - mystock.overrides    : { row_idx: {欄位:值} }   <-- inline ✏️ 編輯舊紀錄用（仍 local）
+     - mystock.heldCodes    : 上次成功的持股代碼（開頁快速抓價用，無敏感資料）
+   - 不在 localStorage：FEE、userRecords、userCodes、prices、priceMeta、sheetsUrl
 */
 
 // ---------- 工具 ----------
@@ -55,17 +54,23 @@ function fmtLotsParts(units){
 }
 
 // ---------- 全域 state ----------
+// Apps Script URL 寫死，不再讀 localStorage（避免不同裝置漏設）
+const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbyr_2Z8YyWgQ6MeHSApg0yLURtQVnCFLSr2rAOHE54hvOzoh-BoKOTdmesEVievWoht/exec';
+
+// 手續費 / 證交稅率寫死（一般券商；若要折扣費率請在這裡改）
+const FEE = { feeRate: 0.001425, feeMin: 20, taxStock: 0.003, taxEtf: 0.001 };
+
 const STATE = {
   data: window.STOCK_DATA,
   who: 'all',
   prices: {},
   priceMeta: { updatedAt: '', source: '' },
-  fee: { feeRate:0.001425, feeMin:20, taxStock:0.003, taxEtf:0.001 },
-  forecast: {},
-  userRecords: [],
-  overrides: {},
+  userRecords: [],     // 已棄用
+  userCodes: {},       // in-memory only
+  overrides: {},       // 已棄用
+  forecast: {},        // 已棄用
   lastFetchProxy: '',
-  sheetsUrl: '',  // Google Apps Script Web App URL
+  sheetsUrl: SHEETS_URL,
 };
 
 // ---------- 初始化 records 加 _id ----------
@@ -75,25 +80,21 @@ const STATE = {
 
 // ---------- 載入設定 ----------
 function loadLocal(){
-  // 股價：完全不讀任何來源，初始為空
-  // - 不讀 localStorage
-  // - 不用 data.js 的 latest_prices 當 fallback（避免顯示過期數字）
-  // 由 initApp 開頁時自動抓一次最新股價填入；抓完前 KPI 會暫時顯示 -
+  // ★ 本機不存任何資料 ★ 所有 STATE 都是 in-memory only，重整就清掉
+  // 一切修改都直接寫進 Google Sheets
   STATE.prices = {};
   STATE.priceMeta = { updatedAt: '', source: '' };
-  // 清掉舊的 localStorage（避免新版上線後還留著舊快取造成困惑）
-  try { localStorage.removeItem('mystock.prices'); localStorage.removeItem('mystock.priceMeta'); } catch(e){}
-
-  try { const f = JSON.parse(localStorage.getItem('mystock.fee')||'null'); if(f) Object.assign(STATE.fee, f); } catch(e){}
-  try { STATE.forecast = JSON.parse(localStorage.getItem('mystock.fc')||'{}') || {}; } catch(e){ STATE.forecast={}; }
-  try { STATE.userRecords = JSON.parse(localStorage.getItem('mystock.userRecords')||'[]') || []; } catch(e){ STATE.userRecords=[]; }
-  try { STATE.overrides = JSON.parse(localStorage.getItem('mystock.overrides')||'{}') || {}; } catch(e){ STATE.overrides={}; }
-  // 使用者自己新增的標的（不在 Sheets 池內）
-  try { STATE.userCodes = JSON.parse(localStorage.getItem('mystock.userCodes')||'{}') || {}; } catch(e){ STATE.userCodes={}; }
-  STATE.lastFetchProxy = localStorage.getItem('mystock.lastFetchProxy') || '';
-  STATE.sheetsUrl = localStorage.getItem('mystock.sheetsUrl') || '';
-  // 把使用者自己新增的代碼合併進 code_to_name（讓下拉看得到）
-  mergeUserCodes();
+  STATE.userRecords = [];      // 已棄用：新增直接寫 Sheets
+  STATE.userCodes = {};        // in-memory only（重整就清）
+  STATE.overrides = {};        // 已棄用：行內 ✏️ 編輯直接寫 Sheets
+  STATE.forecast = {};         // 已棄用：年度預估改用其他方式，留個空物件避免引用炸
+  STATE.lastFetchProxy = '';   // proxy 順序，記憶體 only
+  // 把以前可能殘留的 localStorage key 全部清掉
+  ['mystock.prices','mystock.priceMeta','mystock.fee','mystock.fc','mystock.userRecords',
+   'mystock.userCodes','mystock.sheetsUrl','mystock.lastFetchProxy','mystock.pwHash',
+   'mystock.overrides','mystock.heldCodes'].forEach(k => {
+    try { localStorage.removeItem(k); } catch(e){}
+  });
 }
 // 把 STATE.userCodes 合併進 STATE.data.code_to_name
 function mergeUserCodes(){
@@ -102,15 +103,22 @@ function mergeUserCodes(){
     if (!STATE.data.code_to_name[code]) STATE.data.code_to_name[code] = name;
   }
 }
-function saveUserCodes(){
-  localStorage.setItem('mystock.userCodes', JSON.stringify(STATE.userCodes || {}));
-}
-// 股價只放記憶體，不寫 localStorage
+// userCodes 改成 in-memory only（不寫 localStorage，重整就清掉）
+// 因為 submit 買進時會把 code+name 寫進 Sheets，下次 Sheets 重新載入就會包含進 code_to_name
+function saveUserCodes(){ /* no-op */ }
 function savePrices(meta){ if(meta){ STATE.priceMeta = meta; } }
-function saveFee(){ localStorage.setItem('mystock.fee', JSON.stringify(STATE.fee)); }
-function saveForecast(){ localStorage.setItem('mystock.fc', JSON.stringify(STATE.forecast)); }
-function saveUserRecords(){ localStorage.setItem('mystock.userRecords', JSON.stringify(STATE.userRecords)); }
-function saveOverrides(){ localStorage.setItem('mystock.overrides', JSON.stringify(STATE.overrides)); }
+// 所有編輯都直接寫進 Sheets，本機完全不存
+function saveOverrides(){ /* no-op：完全不寫本機 */ }
+
+// 把一筆紀錄的某些欄位寫回 Sheets（行內 ✏️ 編輯共用）
+async function updateSheetRow(id, fields){
+  const rec = STATE.data.records.find(r => r._id === id);
+  if (!rec || !rec.row_idx){
+    alert('找不到對應的 Sheets 列（請重新從 Sheets 載入後再試）');
+    throw new Error('rec missing row_idx');
+  }
+  return await postToSheets('update', { row_idx: rec.row_idx, fields });
+}
 
 // ---------- 進入 App（密碼登入已移除）----------
 function showApp(){
@@ -144,6 +152,23 @@ function normalizeDate(v){
   return null;
 }
 
+// 寫入 Sheets：append / update
+// 用 Content-Type: text/plain 送 JSON，避免 Apps Script 不支援的 CORS preflight
+async function postToSheets(action, payload){
+  if (!STATE.sheetsUrl) throw new Error('SHEETS_URL 沒設定');
+  const body = JSON.stringify({ action, ...payload });
+  const r = await fetch(STATE.sheetsUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+    body,
+    redirect: 'follow',
+  });
+  if (!r.ok) throw new Error('HTTP ' + r.status);
+  const json = await r.json();
+  if (json.error) throw new Error(json.error);
+  return json;
+}
+
 // 從 Google Apps Script Web App 載入資料（取代 data.js）
 async function loadFromSheets(){
   const url = STATE.sheetsUrl;
@@ -165,12 +190,7 @@ async function loadFromSheets(){
     });
     // 重新合併使用者自己新增的標的（Sheets 載入會覆蓋 code_to_name）
     mergeUserCodes();
-    // 把目前持股代碼快取到 localStorage（純代碼字串，不含敏感數據）
-    // 下次開頁時可以馬上拿來抓價，不必等 Sheets 載入完
-    try {
-      const codes = heldCodes();
-      if (codes.length) localStorage.setItem('mystock.heldCodes', JSON.stringify(codes));
-    } catch(e){}
+    // 本機不存任何快取（所有資料一律從 Sheets 拉）
     return true;
   } catch(e){
     console.warn('Sheets 載入失敗，使用 data.js:', e);
@@ -178,21 +198,15 @@ async function loadFromSheets(){
   }
 }
 
-// 從 localStorage 拿上次的持股代碼（用於開頁時的快速抓價）
-function loadCachedHeldCodes(){
-  try {
-    const arr = JSON.parse(localStorage.getItem('mystock.heldCodes') || '[]');
-    return Array.isArray(arr) ? arr : [];
-  } catch(e){ return []; }
-}
+// （已棄用：本機不存任何資料）
 
 // ---------- 計算 ----------
 function isETF(code){ return STATE.data.etf_codes.includes(code); }
 function feeOf(amount){
-  return Math.max(Math.round(amount * STATE.fee.feeRate), STATE.fee.feeMin);
+  return Math.max(Math.round(amount * FEE.feeRate), FEE.feeMin);
 }
 function taxOf(code, amount){
-  const r = isETF(code) ? STATE.fee.taxEtf : STATE.fee.taxStock;
+  const r = isETF(code) ? FEE.taxEtf : FEE.taxStock;
   return Math.round(amount * r);
 }
 
@@ -930,7 +944,7 @@ function renderTrades(){
     tb.appendChild(tr);
   }
   $('#tradeCount').textContent = `共 ${rows.length} 筆`;
-  $('#feeRateDisplay').textContent = (STATE.fee.feeRate*100).toFixed(4)+'%';
+  if ($('#feeRateDisplay')) $('#feeRateDisplay').textContent = (FEE.feeRate*100).toFixed(4)+'%';
   $$('#tblTrades thead th').forEach((th,i) => {
     const keys = ['status','name','buy_date','buy_price','units','buyCost','sell_date','sell_price','sellNet','profit','ret','annual',null];
     if (!keys[i]) { th.style.cursor=''; return; }
@@ -1005,29 +1019,27 @@ function renderDividends(){
     inp.onchange = e => updateDivDate(e.target.dataset.id, 'buy_date', e.target.value);
   });
   $$('#tblDiv [data-act="reset-div"]').forEach(b => b.onclick = () => {
-    if (!confirm('還原為原始資料？')) return;
-    delete STATE.overrides[b.dataset.id]; saveOverrides(); renderAll();
+    alert('「還原為原始資料」已停用。\n若要修改請直接在 Google Sheets 改完，再按設定分頁的「重新從 Sheets 載入」。');
   });
 }
 
 
-// 在配息紀錄表內直接改日期：除息日 / 入帳日
-function updateDivDate(id, field, value){
+// 在配息紀錄表內直接改日期：除息日 / 入帳日 → 寫回 Sheets
+async function updateDivDate(id, field, value){
   if (!value) return;
-  if (id.startsWith('user-')){
-    const ur = STATE.userRecords.find(x => x._id === id);
-    if (ur){ ur[field] = value; saveUserRecords(); }
-  } else {
-    STATE.overrides[id] = { ...(STATE.overrides[id]||{}), [field]: value };
-    saveOverrides();
+  try {
+    await updateSheetRow(id, { [field]: value });
+    await loadFromSheets();
+    STATE._flashId = id;
+    renderAll();
+    setTimeout(() => { STATE._flashId = null; }, 1200);
+  } catch (e) {
+    alert('寫入 Sheets 失敗：' + e.message);
   }
-  STATE._flashId = id;
-  renderAll();
-  setTimeout(() => { STATE._flashId = null; }, 1200);
 }
 
-// 編輯配息（含預估轉實際）
-function editDividend(id){
+// 編輯配息（含預估轉實際）→ 寫回 Sheets
+async function editDividend(id){
   const merged = getMergedRecords();
   const r = merged.find(x => x._id === id);
   if (!r || r.who !== '配息') return;
@@ -1040,7 +1052,6 @@ function editDividend(id){
   if (isNaN(ps) || ps < 0){ alert('每股配息格式錯誤'); return; }
   const exDateStr = prompt('除息日（影響推估持股，可留空 = 入帳日 −30 天）：', divExDate(r));
   const exDateNew = exDateStr === null ? divExDate(r) : (exDateStr.trim() || null);
-  // 用「除息日當下」的持股推估，回放交易紀錄
   const exDate = divExDate(r);
   const heldUnits = holdingsAtDate(r.code, exDate);
   const suggested = heldUnits > 0 ? Math.round(heldUnits * ps) : (r.dividend || '');
@@ -1048,14 +1059,13 @@ function editDividend(id){
   if (totalStr === null) return;
   const total = parseFloat(totalStr);
   if (isNaN(total) || total < 0){ alert('配息金額格式錯誤'); return; }
-  if (id.startsWith('user-')){
-    const ur = STATE.userRecords.find(x => x._id === id);
-    if (ur){ ur.buy_price = ps; ur.dividend = total; ur.ex_date = exDateNew; saveUserRecords(); }
-  } else {
-    STATE.overrides[id] = { ...(STATE.overrides[id]||{}), buy_price: ps, dividend: total, ex_date: exDateNew };
-    saveOverrides();
+  try {
+    await updateSheetRow(id, { buy_price: ps, dividend: total, ex_date: exDateNew || '' });
+    await loadFromSheets();
+    renderAll();
+  } catch (e) {
+    alert('寫入 Sheets 失敗：' + e.message);
   }
-  renderAll();
 }
 
 // ---------- 月配息 ----------
@@ -1308,7 +1318,7 @@ async function pastePricesJson(){
 // overrideCodes：可選；若有提供就用它而不是 heldCodes()。
 //                用途：開頁時用快取代碼立刻抓，不用等 Sheets 載入完。
 async function fetchPricesViaGAS(mode, overrideCodes){
-  if (!STATE.sheetsUrl){ alert('請先到「設定」貼上 Apps Script URL'); return; }
+  if (!STATE.sheetsUrl){ alert('SHEETS_URL 沒設定，請檢查 app.js'); return; }
   // 同時鎖兩顆 GAS 按鈕（不論點哪一個都顯示中）
   const btns = [
     mode==='live' ? $('#fetchPricesGASLive') : $('#fetchPricesGAS'),
@@ -1460,7 +1470,7 @@ async function fetchTwsePrices(mode){
   }
   Object.assign(STATE.prices, updates);
   const dateStr = priceDate ? `${priceDate.slice(0,4)}-${priceDate.slice(4,6)}-${priceDate.slice(6,8)}` : new Date().toISOString().slice(0,10);
-  if (usedProxy){ STATE.lastFetchProxy = usedProxy; localStorage.setItem('mystock.lastFetchProxy', usedProxy); }
+  // proxy 順序只放記憶體，不存 localStorage
   savePrices({updatedAt: dateStr + ' ' + new Date().toTimeString().slice(0,5), source: mode==='live'?'twse-live':(mode==='yesterday'?'twse-yest':'twse')});
   const got = Object.keys(updates).length;
   const total = codes.length;
@@ -1614,39 +1624,69 @@ function renderAddTab(){
   sellStockSel.onchange = refreshOpenLots;
   refreshOpenLots();
 
-  $('#submitBuy').onclick = () => {
+  $('#submitBuy').onclick = async () => {
     const code = $('#buyStock').value;
-    const r = {
-      _id: nextUserId(), who: $('#buyWho').value, year: parseInt($('#buyDate').value.slice(0,4)),
-      buy_date: $('#buyDate').value, name: STATE.data.code_to_name[code], code,
-      buy_price: parseFloat($('#buyPrice').value), units: parseFloat($('#buyUnits').value),
-      buy_total: parseFloat($('#buyPrice').value) * parseFloat($('#buyUnits').value),
-      sell_date: null, sell_price: null, sell_units: null, sell_total: null, dividend: null
+    const buyDate = $('#buyDate').value;
+    const buyPrice = parseFloat($('#buyPrice').value);
+    const units = parseFloat($('#buyUnits').value);
+    if (!buyDate || !buyPrice || !units){ alert('請填完整：日期、買價、股數'); return; }
+    const row = {
+      who: $('#buyWho').value,
+      year: parseInt(buyDate.slice(0,4)),
+      buy_date: buyDate,
+      name: STATE.data.code_to_name[code] || (STATE.userCodes && STATE.userCodes[code]) || '',
+      code,
+      buy_price: buyPrice,
+      units,
+      buy_total: buyPrice * units
     };
-    if (!r.buy_date || !r.buy_price || !r.units){ alert('請填完整：日期、買價、股數'); return; }
-    STATE.userRecords.push(r);
-    saveUserRecords();
-    flashMsg('#buyMsg', `✔ 已新增買進：${r.name} ${r.units} 股 @ ${r.buy_price}`);
-    ['#buyPrice','#buyUnits'].forEach(s => $(s).value='');
-    recalcBuy();
-    renderAll();
+    flashMsg('#buyMsg', '⏳ 寫入 Sheets…');
+    $('#submitBuy').disabled = true;
+    try {
+      await postToSheets('append', { row });
+      await loadFromSheets();
+      flashMsg('#buyMsg', `✔ 已寫入 Sheets：${row.name} ${row.units} 股 @ ${row.buy_price}`);
+      ['#buyPrice','#buyUnits'].forEach(s => $(s).value='');
+      recalcBuy();
+      renderAll();
+    } catch (e) {
+      flashMsg('#buyMsg', `✗ 寫入失敗：${e.message}`, true);
+    } finally {
+      $('#submitBuy').disabled = false;
+    }
   };
 
-  $('#submitSell').onclick = () => {
+  $('#submitSell').onclick = async () => {
     const lotId = $('#sellLot').value;
     const sd = $('#sellDate').value;
     const sp = parseFloat($('#sellPrice').value);
     if (!lotId){ alert('沒有可賣的批次'); return; }
     if (!sd || !sp){ alert('請填完整：日期、賣價'); return; }
-    STATE.overrides[lotId] = { ...(STATE.overrides[lotId]||{}), sell_date: sd, sell_price: sp };
-    saveOverrides();
-    flashMsg('#sellMsg', `✔ 已標記為賣出 @ ${sp}`);
-    $('#sellPrice').value='';
-    refreshOpenLots();
-    renderAll();
+    const lot = STATE.data.records.find(r => r._id === lotId);
+    if (!lot){ alert('找不到對應的買進批次'); return; }
+    if (!lot.row_idx){ alert('row_idx 缺失，請先重新部署 Apps Script'); return; }
+    const sellUnits = lot.units;
+    const sellTotal = sp * sellUnits;   // 毛額；手續費 + 證交稅由前端算淨額
+    flashMsg('#sellMsg', '⏳ 更新 Sheets…');
+    $('#submitSell').disabled = true;
+    try {
+      await postToSheets('update', {
+        row_idx: lot.row_idx,
+        fields: { sell_date: sd, sell_price: sp, sell_units: sellUnits, sell_total: sellTotal }
+      });
+      await loadFromSheets();
+      flashMsg('#sellMsg', `✔ 已寫入 Sheets：賣 @ ${sp}`);
+      $('#sellPrice').value='';
+      refreshOpenLots();
+      renderAll();
+    } catch (e) {
+      flashMsg('#sellMsg', `✗ 更新失敗：${e.message}`, true);
+    } finally {
+      $('#submitSell').disabled = false;
+    }
   };
 
-  $('#submitDiv').onclick = () => {
+  $('#submitDiv').onclick = async () => {
     const code = $('#divStockNew').value;
     const ps = parseFloat($('#divPerShare').value);
     const date = $('#divDateNew').value;
@@ -1661,21 +1701,32 @@ function renderAddTab(){
     );
     if (dups.length > 0){
       const detail = dups.map(d => `  · 除息 ${divExDate(d)||'?'}，入帳 ${d.buy_date||'?'}，金額 ${(d.dividend||0).toLocaleString()}`).join('\n');
-      const ok = confirm(`⚠ 已有 ${STATE.data.code_to_name[code]} 在 ${month} 月的配息紀錄：\n${detail}\n\n確定要新增重複的紀錄嗎？\n（建議直接點該筆的日期欄改日期，不要新增）`);
+      const ok = confirm(`⚠ 已有 ${STATE.data.code_to_name[code]} 在 ${month} 月的配息紀錄：\n${detail}\n\n確定要新增重複的紀錄嗎？`);
       if (!ok) return;
     }
-    const r = {
-      _id: nextUserId(), who: '配息', year: parseInt(date.slice(0,4)),
-      buy_date: date, ex_date: exDate || null,
-      name: STATE.data.code_to_name[code], code,
-      buy_price: ps, units: null, buy_total: null,
-      sell_date: null, sell_price: null, sell_units: null, sell_total: null, dividend: amount
+    const row = {
+      who: '配息',
+      year: parseInt(date.slice(0,4)),
+      buy_date: date,
+      ex_date: exDate || '',
+      name: STATE.data.code_to_name[code] || '',
+      code,
+      buy_price: ps,
+      dividend: amount
     };
-    STATE.userRecords.push(r);
-    saveUserRecords();
-    flashMsg('#divMsg', `✔ 已新增配息：${r.name} ${fmt(amount)} 元`);
-    $('#divPerShare').value=''; $('#divUnitsCalc').value='';
-    renderAll();
+    flashMsg('#divMsg', '⏳ 寫入 Sheets…');
+    $('#submitDiv').disabled = true;
+    try {
+      await postToSheets('append', { row });
+      await loadFromSheets();
+      flashMsg('#divMsg', `✔ 已寫入 Sheets：${row.name} 配息 ${fmt(amount)} 元`);
+      $('#divPerShare').value=''; $('#divUnitsCalc').value='';
+      renderAll();
+    } catch (e) {
+      flashMsg('#divMsg', `✗ 寫入失敗：${e.message}`, true);
+    } finally {
+      $('#submitDiv').disabled = false;
+    }
   };
 
   // 配股自動算：配股率(元) ÷ 10 = 每股獲配股數（面額 10 元）
@@ -1702,24 +1753,37 @@ function renderAddTab(){
     sdExEl.oninput = onSdExChange;
   }
 
-  $('#submitSd').onclick = () => {
+  $('#submitSd').onclick = async () => {
     const code = $('#sdStockNew').value;
     const exDate = $('#sdExDateNew').value;
     const date = $('#sdDateNew').value;
     const ps = parseFloat($('#sdPerShare').value) || 0;
     const u = parseFloat($('#sdUnits').value);
     if (!exDate || !date || !u){ alert('請填完整：除權日、入帳日、配股股數'); return; }
-    const r = {
-      _id: nextUserId(), who: '配股', year: parseInt(date.slice(0,4)),
-      buy_date: date, ex_date: exDate, name: STATE.data.code_to_name[code], code,
-      buy_price: ps, units: u, buy_total: 0,
-      sell_date: null, sell_price: null, sell_units: null, sell_total: null, dividend: null
+    const row = {
+      who: '配股',
+      year: parseInt(date.slice(0,4)),
+      buy_date: date,
+      ex_date: exDate,
+      name: STATE.data.code_to_name[code] || '',
+      code,
+      buy_price: ps,
+      units: u,
+      buy_total: 0
     };
-    STATE.userRecords.push(r);
-    saveUserRecords();
-    flashMsg('#sdMsg', `✔ 已新增配股：${r.name} ${fmt(u)} 股`);
-    $('#sdUnits').value='';
-    renderAll();
+    flashMsg('#sdMsg', '⏳ 寫入 Sheets…');
+    $('#submitSd').disabled = true;
+    try {
+      await postToSheets('append', { row });
+      await loadFromSheets();
+      flashMsg('#sdMsg', `✔ 已寫入 Sheets：${row.name} 配股 ${fmt(u)} 股`);
+      $('#sdUnits').value='';
+      renderAll();
+    } catch (e) {
+      flashMsg('#sdMsg', `✗ 寫入失敗：${e.message}`, true);
+    } finally {
+      $('#submitSd').disabled = false;
+    }
   };
 
   renderUserRecordsList();
@@ -1773,11 +1837,15 @@ function renderUserRecordsList(){
     tbody.appendChild(tr);
   }
   $$('[data-act="del-new"]').forEach(b => b.onclick = () => deleteUserRecord(b.dataset.id));
-  $$('[data-act="del-override"]').forEach(b => b.onclick = () => {
-    if (!confirm('確定移除這筆賣出標記？該批次會回復為持有中')) return;
-    delete STATE.overrides[b.dataset.id];
-    saveOverrides();
-    renderAll();
+  $$('[data-act="del-override"]').forEach(b => b.onclick = async () => {
+    if (!confirm('移除這筆賣出標記（會清掉 Sheets 上的 sell_date / sell_price / sell_units / sell_total）？')) return;
+    try {
+      await updateSheetRow(b.dataset.id, { sell_date: '', sell_price: '', sell_units: '', sell_total: '' });
+      await loadFromSheets();
+      renderAll();
+    } catch (e) {
+      alert('寫入 Sheets 失敗：' + e.message);
+    }
   });
   $$('[data-act="edit-buy-u"]').forEach(b => b.onclick = () => openLotEditor(b.dataset.id));
   $$('[data-act="edit-div-u"]').forEach(b => b.onclick = () => editDividend(b.dataset.id));
@@ -1787,136 +1855,60 @@ function renderUserRecordsList(){
 function deleteUserRecord(id){
   if (!confirm('確定刪除這筆紀錄？')) return;
   STATE.userRecords = STATE.userRecords.filter(r => r._id !== id);
-  saveUserRecords();
+  /* saveUserRecords 已棄用 */
   renderAll();
 }
 
-function openLotEditor(id){
+async function openLotEditor(id){
   const merged = getMergedRecords();
   const r = merged.find(x => x._id === id);
   if (!r) return;
-  const isUser = id.startsWith('user-');
   let msg = `${r.name} ${r.code}\n買進 ${r.buy_date} @ ${r.buy_price} × ${r.units}股 (${r.who||'我'})`;
   if (r.sell_date) msg += `\n已賣出 ${r.sell_date} @ ${r.sell_price}`;
-  msg += '\n\n選擇操作：\n1. 標記為已賣出 / 修改賣出資訊\n2. 移除賣出標記 (回復為持有)\n3. 修改買進資料 (僅限自建)\n4. 刪除這筆 (僅限自建)';
-  const act = prompt(msg + '\n\n輸入 1 / 2 / 3 / 4：');
-  if (act==='1'){
-    const sd = prompt('賣出日期 (YYYY-MM-DD)：', r.sell_date || todayISO()); if(!sd) return;
-    const sp = parseFloat(prompt('賣價：', r.sell_price || '')); if(!sp) return;
-    STATE.overrides[id] = { ...(STATE.overrides[id]||{}), sell_date: sd, sell_price: sp };
-    saveOverrides(); renderAll();
-  } else if (act==='2'){
-    if (STATE.overrides[id]){
-      delete STATE.overrides[id];
-      saveOverrides(); renderAll();
-    } else {
-      alert('這筆是 Excel 原始的賣出資料，請改 Excel 後重跑 rebuild_data.py');
+  msg += '\n\n選擇操作：\n1. 標記為已賣出 / 修改賣出資訊\n2. 移除賣出標記 (回復為持有)';
+  const act = prompt(msg + '\n\n輸入 1 / 2：');
+  try {
+    if (act==='1'){
+      const sd = prompt('賣出日期 (YYYY-MM-DD)：', r.sell_date || todayISO()); if(!sd) return;
+      const sp = parseFloat(prompt('賣價：', r.sell_price || '')); if(!sp) return;
+      const sellUnits = r.units;
+      const sellTotal = sp * sellUnits;
+      await updateSheetRow(id, { sell_date: sd, sell_price: sp, sell_units: sellUnits, sell_total: sellTotal });
+      await loadFromSheets();
+      renderAll();
+    } else if (act==='2'){
+      if (!r.sell_date){ alert('原本就沒有賣出資料'); return; }
+      await updateSheetRow(id, { sell_date: '', sell_price: '', sell_units: '', sell_total: '' });
+      await loadFromSheets();
+      renderAll();
     }
-  } else if (act==='3'){
-    if (!isUser){ alert('Excel 原始紀錄不能在這裡改，請改 Excel 後重跑 rebuild_data.py'); return; }
-    const ur = STATE.userRecords.find(x => x._id === id);
-    if (!ur) return;
-    const bd = prompt('買進日期 (YYYY-MM-DD)：', ur.buy_date); if(!bd) return;
-    const bpStr = prompt('買價：', ur.buy_price); if(bpStr===null) return;
-    const bp = parseFloat(bpStr); if(isNaN(bp) || bp<=0){ alert('買價無效'); return; }
-    const unStr = prompt('股數：', ur.units); if(unStr===null) return;
-    const un = parseFloat(unStr); if(isNaN(un) || un<=0){ alert('股數無效'); return; }
-    const codeNew = prompt('股票代碼 (留空 = 不改)：', ur.code) || ur.code;
-    ur.buy_date = bd; ur.buy_price = bp; ur.units = un; ur.buy_total = bp * un;
-    if (codeNew !== ur.code && STATE.data.code_to_name[codeNew]){
-      ur.code = codeNew;
-      ur.name = STATE.data.code_to_name[codeNew];
-    }
-    saveUserRecords(); renderAll();
-    alert('已更新買進資料');
-  } else if (act==='4'){
-    if (!isUser){ alert('Excel 原始紀錄不能在這裡刪，請改 Excel 後重跑 rebuild_data.py'); return; }
-    deleteUserRecord(id);
+  } catch (e) {
+    alert('寫入 Sheets 失敗：' + e.message);
   }
 }
 
 // ---------- 設定 ----------
 function renderSettings(){
-  $('#feeRate').value = STATE.fee.feeRate*100;
-  $('#feeMin').value = STATE.fee.feeMin;
-  $('#taxStock').value = STATE.fee.taxStock*100;
-  $('#taxEtf').value = STATE.fee.taxEtf*100;
-  $('#saveFee').onclick = () => {
-    STATE.fee.feeRate = parseFloat($('#feeRate').value)/100 || 0.001425;
-    STATE.fee.feeMin = parseFloat($('#feeMin').value) || 20;
-    STATE.fee.taxStock = parseFloat($('#taxStock').value)/100 || 0.003;
-    STATE.fee.taxEtf = parseFloat($('#taxEtf').value)/100 || 0.001;
-    saveFee();
-    renderAll();
-    alert('已儲存');
-  };
-  // Google Sheets URL
-  if ($('#sheetsUrl')){
-    $('#sheetsUrl').value = STATE.sheetsUrl;
-    $('#saveSheetsUrl').onclick = async () => {
-      const url = $('#sheetsUrl').value.trim();
-      STATE.sheetsUrl = url;
-      localStorage.setItem('mystock.sheetsUrl', url);
-      $('#sheetsUrlMsg').textContent = '儲存中…';
-      if (url){
-        const ok = await loadFromSheets();
-        $('#sheetsUrlMsg').textContent = ok ? `✔ 從 Sheets 載入 ${STATE.data.records.length} 筆` : '✗ 連不上，請檢查 URL 與部署設定';
-        $('#sheetsUrlMsg').className = ok ? 'small green' : 'small red';
-        if (ok){
-          renderAll();
-          // 第一次設定 URL 之後抓一次股價
-          try { fetchPricesViaGAS('live'); } catch(e){}
-        }
-      } else {
-        $('#sheetsUrlMsg').textContent = '已清除';
-      }
-    };
-    $('#copyShareLink').onclick = async () => {
-      if (!STATE.sheetsUrl){ alert('請先填好 URL 並按「儲存並載入」'); return; }
-      const baseUrl = window.location.origin + window.location.pathname;
-      const shareUrl = baseUrl + '#sheets=' + encodeURIComponent(STATE.sheetsUrl);
-      try {
-        await navigator.clipboard.writeText(shareUrl);
-        $('#sheetsUrlMsg').textContent = '✔ 已複製可分享連結到剪貼簿，到別的裝置貼上開啟即可自動帶入 URL';
-        $('#sheetsUrlMsg').className = 'small green';
-      } catch(e){
-        prompt('手動複製這串網址：', shareUrl);
-      }
-    };
+  // Sheets URL 已寫死，只保留「重新載入」按鈕
+  if ($('#reloadSheets')){
     $('#reloadSheets').onclick = async () => {
       $('#sheetsUrlMsg').textContent = '重新載入中…';
       const ok = await loadFromSheets();
       $('#sheetsUrlMsg').textContent = ok ? `✔ 已重新載入 (${STATE.data.records.length} 筆)` : '✗ 載入失敗';
       $('#sheetsUrlMsg').className = ok ? 'small green' : 'small red';
-      if (ok) renderAll();
+      if (ok){
+        renderAll();
+        try { fetchPricesViaGAS('live'); } catch(e){}
+      }
     };
   }
-  // 密碼登入功能已移除
-  $('#exportSettings').onclick = () => {
-    const obj = { prices:STATE.prices, fee:STATE.fee, forecast:STATE.forecast, userRecords:STATE.userRecords, overrides:STATE.overrides };
-    const blob = new Blob([JSON.stringify(obj,null,2)], {type:'application/json'});
-    const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download='mystock-settings.json'; a.click();
-  };
-  $('#importSettings').onclick = () => $('#importFile').click();
-  $('#importFile').onchange = async (e) => {
-    const f = e.target.files[0]; if (!f) return;
-    try {
-      const obj = JSON.parse(await f.text());
-      if (obj.prices) STATE.prices = obj.prices;
-      if (obj.fee) Object.assign(STATE.fee, obj.fee);
-      if (obj.forecast) STATE.forecast = obj.forecast;
-      if (obj.userRecords) STATE.userRecords = obj.userRecords;
-      if (obj.overrides) STATE.overrides = obj.overrides;
-      savePrices(STATE.priceMeta); saveFee(); saveForecast(); saveUserRecords(); saveOverrides();
-      alert('已匯入');
-      renderAll();
-    } catch(err){ alert('匯入失敗：'+err.message); }
-  };
-  $('#clearAll').onclick = () => {
-    if (!confirm('將清除：密碼、自訂股價、手續費、預估參數、新增交易、覆寫。要繼續嗎？')) return;
-    ['mystock.pwHash','mystock.prices','mystock.priceMeta','mystock.fee','mystock.fc','mystock.userRecords','mystock.overrides','mystock.userCodes','mystock.heldCodes'].forEach(k => localStorage.removeItem(k));
-    location.reload();
-  };
+  if ($('#clearAll')){
+    $('#clearAll').onclick = () => {
+      if (!confirm('將清除瀏覽器內的所有本機資料（不影響 Google Sheets）。要繼續嗎？')) return;
+      ['mystock.fee','mystock.fc','mystock.userRecords','mystock.overrides','mystock.userCodes','mystock.heldCodes','mystock.sheetsUrl','mystock.prices','mystock.priceMeta','mystock.pwHash','mystock.lastFetchProxy'].forEach(k => localStorage.removeItem(k));
+      location.reload();
+    };
+  }
 }
 
 // ---------- Tabs ----------
@@ -1973,38 +1965,14 @@ function renderAll(){
 
 async function initApp(){
   loadLocal();
-  // 從網址 hash 取得 sheets URL（# 後面的 sheets=... 不會送到 server，安全）
-  const m = (window.location.hash || '').match(/sheets=([^&]+)/);
-  if (m){
-    const urlFromHash = decodeURIComponent(m[1]);
-    if (urlFromHash && urlFromHash !== STATE.sheetsUrl){
-      STATE.sheetsUrl = urlFromHash;
-      localStorage.setItem('mystock.sheetsUrl', urlFromHash);
-      console.log('已從網址自動載入 Sheets URL');
-    }
-  }
-
-  // 讓抓 Sheets 跟抓股價同時並行，這樣不用等 Sheets 載入完才開始抓價
-  // 若有上次快取的代碼就直接用，否則等 Sheets 載完再抓
-  let pricesPromise = Promise.resolve();
-  const cachedCodes = loadCachedHeldCodes();
-  if (STATE.sheetsUrl && cachedCodes.length){
-    // 馬上用快取代碼開始抓，不必等 Sheets
-    pricesPromise = fetchPricesViaGAS('live', cachedCodes).catch(e => console.warn('抓價失敗', e));
-  }
-
-  if (STATE.sheetsUrl){
-    const ok = await loadFromSheets();
-    if (ok) console.log('已從 Google Sheets 載入');
-  }
+  // 從 Sheets 載入所有交易紀錄
+  const ok = await loadFromSheets();
+  if (ok) console.log('已從 Google Sheets 載入');
   $('#updated').textContent = `資料更新 ${STATE.data.updated_at}`;
   bindTabs();
   renderAll();
-
-  // 沒有快取代碼（第一次用）→ Sheets 載完才抓
-  if (STATE.sheetsUrl && !cachedCodes.length){
-    pricesPromise = fetchPricesViaGAS('live').catch(e => console.warn('抓價失敗', e));
-  }
+  // Sheets 載完後抓一次最新股價
+  fetchPricesViaGAS('live').catch(e => console.warn('抓價失敗', e));
 }
 
 // 已移除密碼登入：直接進入 app

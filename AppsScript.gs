@@ -24,6 +24,71 @@ function doGet(e) {
   }
 }
 
+// 寫入：append (新增列) 或 update (改某列特定欄位)
+// 為了避免 CORS preflight，前端用 Content-Type: text/plain 送 JSON
+function doPost(e) {
+  try {
+    if (!e || !e.postData || !e.postData.contents) throw new Error('沒有 POST body');
+    const body = JSON.parse(e.postData.contents);
+    const action = body.action || '';
+    if (action === 'append') return doAppendRow(body);
+    if (action === 'update') return doUpdateRow(body);
+    throw new Error('未知 action: ' + action);
+  } catch (err) {
+    return jsonOut({ error: err.message });
+  }
+}
+
+function doAppendRow(body) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) throw new Error('找不到分頁「' + SHEET_NAME + '」');
+  const r = body.row || {};
+  // 欄位順序必須跟 doRead 的 destructure 一致
+  sheet.appendRow([
+    r.who || '',
+    r.year != null ? r.year : '',
+    r.buy_date || '',
+    r.name || '',
+    r.code != null ? String(r.code) : '',
+    r.buy_price != null ? r.buy_price : '',
+    r.units != null ? r.units : '',
+    r.buy_total != null ? r.buy_total : '',
+    r.sell_date || '',
+    r.sell_price != null ? r.sell_price : '',
+    r.sell_units != null ? r.sell_units : '',
+    r.sell_total != null ? r.sell_total : '',
+    r.dividend != null ? r.dividend : '',
+    r.ex_date || ''
+  ]);
+  return jsonOut({ ok: true, action: 'append', row: r });
+}
+
+function doUpdateRow(body) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) throw new Error('找不到分頁「' + SHEET_NAME + '」');
+  const rowIdx = parseInt(body.row_idx, 10);
+  if (!rowIdx || rowIdx < 2) throw new Error('row_idx 無效：' + body.row_idx);
+  const fields = body.fields || {};
+  // 欄位 → 1-indexed column
+  const colMap = {
+    who: 1, year: 2, buy_date: 3, name: 4, code: 5,
+    buy_price: 6, units: 7, buy_total: 8,
+    sell_date: 9, sell_price: 10, sell_units: 11, sell_total: 12,
+    dividend: 13, ex_date: 14
+  };
+  const updated = {};
+  for (const key in fields) {
+    const col = colMap[key];
+    if (!col) continue;
+    const v = fields[key];
+    sheet.getRange(rowIdx, col).setValue(v == null ? '' : v);
+    updated[key] = v;
+  }
+  return jsonOut({ ok: true, action: 'update', row_idx: rowIdx, updated: updated });
+}
+
 // ─── 讀 Google Sheets ──────────────────────────────────
 function doRead() {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
@@ -44,6 +109,7 @@ function doRead() {
     if (who === '配股' && typeof units === 'number') unitsRound = Math.round(units);
 
     records.push({
+      row_idx: i + 1,    // 該紀錄在 sheet 中的列號（1-indexed，第一列是 header）
       who: who,
       year: typeof year === 'number' ? year : null,
       buy_date: fmtDate(buyDate),
@@ -86,52 +152,76 @@ function doFetchPrices(e) {
   let priceDate = '';
   const errors = [];
 
-  // 先試 mis.twse 即時 (上市)
+  // ── 步驟 1：Yahoo Finance（即時、Google IP 不會被擋，當主力）──────
+  const liveUpdates = {};   // 只記這次從即時 API 拿到的，等下才寫 cache（避免 OpenAPI 污染）
+
   try {
-    const tseList = codes.map(c => `tse_${c}.tw`).join('|');
-    const r = parseTWSE(fetchTWSE(tseList), mode);
+    const r = fetchYahoo(codes);
     Object.assign(updates, r.updates);
+    Object.assign(liveUpdates, r.updates);
     r.foundCodes.forEach(c => found.add(c));
     if (r.priceDate && !priceDate) priceDate = r.priceDate;
-  } catch (err) { errors.push('tse-mis: ' + err.message); }
+  } catch (err) { errors.push('yahoo: ' + err.message); }
 
-  // 試上櫃
-  const missing1 = codes.filter(c => !found.has(c));
-  if (missing1.length > 0) {
+  // ── 步驟 1.5：TSE / OTC MIS 即時 API（Yahoo 抓不到的、或當補強）
+  const missingAfterYahoo = codes.filter(function(c){ return !found.has(c); });
+  if (missingAfterYahoo.length > 0) {
     try {
-      const otcList = missing1.map(c => `otc_${c}.tw`).join('|');
-      const r = parseTWSE(fetchTWSE(otcList), mode);
+      const tseList = missingAfterYahoo.map(c => `tse_${c}.tw`).join('|');
+      const r = parseTWSE(fetchTWSE(tseList), mode);
       Object.assign(updates, r.updates);
+      Object.assign(liveUpdates, r.updates);
       r.foundCodes.forEach(c => found.add(c));
       if (r.priceDate && !priceDate) priceDate = r.priceDate;
-    } catch (err) { errors.push('otc-mis: ' + err.message); }
+    } catch (err) { errors.push('tse-mis: ' + err.message); }
+
+    const missingAfterTse = codes.filter(function(c){ return !found.has(c); });
+    if (missingAfterTse.length > 0) {
+      try {
+        const otcList = missingAfterTse.map(c => `otc_${c}.tw`).join('|');
+        const r = parseTWSE(fetchTWSE(otcList), mode);
+        Object.assign(updates, r.updates);
+        Object.assign(liveUpdates, r.updates);
+        r.foundCodes.forEach(c => found.add(c));
+        if (r.priceDate && !priceDate) priceDate = r.priceDate;
+      } catch (err) { errors.push('otc-mis: ' + err.message); }
+    }
   }
 
-  // 還是沒抓到的話走 OpenAPI 收盤備援
-  const missing2 = codes.filter(c => !found.has(c));
-  if (missing2.length > 0) {
-    try {
-      const r = fetchOpenAPI(missing2);
-      Object.assign(updates, r.updates);
-      r.foundCodes.forEach(c => found.add(c));
-      if (r.priceDate && !priceDate) priceDate = r.priceDate;
-    } catch (err) { errors.push('openapi: ' + err.message); }
-  }
+  // ── 步驟 2：把這次即時 API（TSE/OTC/Yahoo）成功的價格寫進 cache（OpenAPI 不寫）
+  try {
+    if (Object.keys(liveUpdates).length > 0) {
+      savePriceCache(liveUpdates, priceDate || todayStr_());
+    }
+  } catch (err) { errors.push('cache-save: ' + err.message); }
 
-  // 把今天抓到的存進 cache（PropertiesService 永久保存）
-  try { savePriceCache(updates, priceDate || ''); } catch (err) { errors.push('cache-save: ' + err.message); }
-
-  // 還沒抓到的，從 cache 撈上次成功的值（昨天/前天的價格）
-  const stillMissing = codes.filter(c => !found.has(c));
-  if (stillMissing.length > 0) {
-    const cached = loadPriceCache(stillMissing);
-    for (const c of stillMissing) {
-      if (cached[c] != null) {
-        updates[c] = cached[c].price;
-        found.add(c);
-        fromCache.add(c);
+  // ── 步驟 3：MIS 抓不到的，先查 cache（裡面是過去任何一次 MIS 成功的價）
+  // 比 OpenAPI 可信，因為 OpenAPI 可能還沒上傳今天的檔案
+  try {
+    const stillMissing1 = codes.filter(function(c){ return !found.has(c); });
+    if (stillMissing1.length > 0) {
+      const cached = loadPriceCache(stillMissing1) || {};
+      for (const c of stillMissing1) {
+        const entry = cached[c];
+        if (entry && typeof entry.price === 'number' && entry.price > 0) {
+          updates[c] = entry.price;
+          found.add(c);
+          fromCache.add(c);
+        }
       }
     }
+  } catch (err) { errors.push('cache-load: ' + err.message); }
+
+  // ── 步驟 4：cache 也沒有的最後手段：OpenAPI 收盤檔（可能是昨日資料，不寫 cache）
+  const stillMissing2 = codes.filter(function(c){ return !found.has(c); });
+  if (stillMissing2.length > 0) {
+    try {
+      const r = fetchOpenAPI(stillMissing2);
+      Object.assign(updates, r.updates);
+      r.foundCodes.forEach(c => found.add(c));
+      if (r.priceDate && !priceDate) priceDate = r.priceDate;
+      r.foundCodes.forEach(c => fromCache.add(c));   // 用 fromCache 旗標標示，提醒這是「非即時」來源
+    } catch (err) { errors.push('openapi: ' + err.message); }
   }
 
   if (priceDate && priceDate.length === 8) {
@@ -173,6 +263,51 @@ function fetchTWSE(chList) {
     if (attempt < 2) Utilities.sleep(500);
   }
   throw lastErr || new Error('TWSE 無回應');
+}
+
+// 從 Yahoo Finance 抓即時價（query1.finance.yahoo.com/v8/finance/chart）
+// 沒有官方文件保證，但目前免費可用、不需要 API key、Apps Script IP 沒被擋
+// 上市用 .TW 後綴、上櫃用 .TWO；先全部試 .TW，沒抓到再試 .TWO
+function fetchYahoo(codes) {
+  const updates = {};
+  const foundCodes = [];
+  let priceDate = '';
+  const headers = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
+
+  function batch(symList, suffix) {
+    const reqs = symList.map(function(c){
+      return { url: 'https://query1.finance.yahoo.com/v8/finance/chart/' + c + suffix + '?interval=1d&range=2d',
+               muteHttpExceptions: true, headers: headers };
+    });
+    var responses;
+    try { responses = UrlFetchApp.fetchAll(reqs); } catch (e) { return []; }
+    const stillMissing = [];
+    responses.forEach(function(res, i){
+      const code = symList[i];
+      if (res.getResponseCode() !== 200) { stillMissing.push(code); return; }
+      try {
+        const obj = JSON.parse(res.getContentText());
+        const result = obj && obj.chart && obj.chart.result && obj.chart.result[0];
+        if (!result) { stillMissing.push(code); return; }
+        const meta = result.meta;
+        const p = meta && parseFloat(meta.regularMarketPrice);
+        if (!(p > 0)) { stillMissing.push(code); return; }
+        updates[code] = p;
+        foundCodes.push(code);
+        if (meta.regularMarketTime && !priceDate) {
+          priceDate = Utilities.formatDate(new Date(meta.regularMarketTime * 1000), _ssTz_(), 'yyyyMMdd');
+        }
+      } catch (e) { stillMissing.push(code); }
+    });
+    return stillMissing;
+  }
+
+  // 第一輪：.TW（上市）
+  const missingAfterTW = batch(codes, '.TW');
+  // 第二輪：剩下的用 .TWO（上櫃）
+  if (missingAfterTW.length > 0) batch(missingAfterTW, '.TWO');
+
+  return { updates: updates, foundCodes: foundCodes, priceDate: priceDate };
 }
 
 // 用 TWSE OpenAPI 抓「上市股票每日收盤」，取需要的代碼
@@ -241,10 +376,12 @@ function jsonOut(obj) {
 // 把每次成功抓到的股價存起來，下次如果某些代碼抓不到就用上次的值
 // PropertiesService 每個 property 上限 9KB、整個 script 500KB，存幾百檔股價沒問題
 function savePriceCache(updates, priceDate) {
-  if (!updates) return;
+  if (!updates || typeof updates !== 'object') return;
   const props = PropertiesService.getScriptProperties();
   const items = {};
-  for (const code in updates) {
+  const keys = Object.keys(updates);
+  for (var i = 0; i < keys.length; i++) {
+    const code = keys[i];
     const p = updates[code];
     if (p == null || isNaN(p) || p <= 0) continue;
     items['lp_' + code] = JSON.stringify({ price: p, date: priceDate || '', ts: Date.now() });
@@ -252,10 +389,27 @@ function savePriceCache(updates, priceDate) {
   if (Object.keys(items).length > 0) props.setProperties(items, false);
 }
 
-function loadPriceCache(codes) {
+// 清掉所有股價 cache（在編輯器手動執行一次即可）
+// 上次部署時 OpenAPI 的舊收盤價可能還在 cache 裡污染結果
+function clearPriceCache() {
   const props = PropertiesService.getScriptProperties();
+  const all = props.getProperties();
+  const toDelete = [];
+  for (const k in all) {
+    if (k.indexOf('lp_') === 0) toDelete.push(k);
+  }
+  toDelete.forEach(function(k){ props.deleteProperty(k); });
+  Logger.log('cleared cache keys: ' + toDelete.length);
+  return toDelete.length;
+}
+
+function loadPriceCache(codes) {
   const result = {};
-  for (const code of codes) {
+  if (!codes || !codes.length) return result;
+  const props = PropertiesService.getScriptProperties();
+  for (var i = 0; i < codes.length; i++) {
+    const code = codes[i];
+    if (!code) continue;
     const v = props.getProperty('lp_' + code);
     if (!v) continue;
     try {
@@ -276,6 +430,9 @@ function loadPriceCache(codes) {
 function _ssTz_(){
   try { return SpreadsheetApp.getActiveSpreadsheet().getSpreadsheetTimeZone() || 'Asia/Taipei'; }
   catch (e) { return 'Asia/Taipei'; }
+}
+function todayStr_(){
+  return Utilities.formatDate(new Date(), _ssTz_(), 'yyyy-MM-dd');
 }
 function _pad2_(n){ n = String(n); return n.length < 2 ? '0' + n : n; }
 function fmtDate(d) {

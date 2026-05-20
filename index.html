@@ -542,36 +542,20 @@
     <section id="tab-settings" hidden>
       <div class="panel">
         <h3>Google Sheets 資料來源</h3>
-        <div class="form-row"><label>Apps Script URL</label><input id="sheetsUrl" type="text" placeholder="https://script.google.com/macros/s/.../exec" style="width:auto;flex:1;min-width:0"></div>
+        <p class="small" id="sheetsUrlDisplay">已寫死在程式中。要換 URL 請改 <code>app.js</code> 的 <code>SHEETS_URL</code>。</p>
         <div style="display:flex;gap:8px;align-items:center">
-          <button class="btn" id="saveSheetsUrl">儲存並載入</button>
           <button class="btn ghost" id="reloadSheets">重新從 Sheets 載入</button>
-          <button class="btn ghost" id="copyShareLink">🔖 複製設定連結</button>
           <span class="small" id="sheetsUrlMsg"></span>
         </div>
-        <p class="small" style="margin-top:8px">
-          設定後每次打開網站會從 Google Sheets 取最新資料；留空則用本機 data.js（離線備援）。<br>
-          <b>🔖 複製設定連結</b>：產生帶 URL 的網址，書籤後新裝置開啟自動帶入 URL，免去手動複製貼上。<br>
-          <span class="sub">註：URL 在網址 # 之後，不會送到伺服器，僅在本機處理。</span>
-        </p>
       </div>
       <div class="panel">
-        <h3>手續費設定</h3>
-        <div class="form-row"><label>手續費率 (%)</label><input id="feeRate" type="number" step="0.0001" /><span class="small">預設 0.1425%（一般券商；可自訂折扣後費率）</span></div>
-        <div class="form-row"><label>手續費下限</label><input id="feeMin" type="number" step="1" /><span class="small">預設 20 元</span></div>
-        <div class="form-row"><label>股票證交稅 (%)</label><input id="taxStock" type="number" step="0.001" /><span class="small">預設 0.3%</span></div>
-        <div class="form-row"><label>ETF 證交稅 (%)</label><input id="taxEtf" type="number" step="0.001" /><span class="small">預設 0.1%</span></div>
-        <button class="btn" id="saveFee">儲存</button>
+        <h3>手續費 / 證交稅</h3>
+        <p class="small">已寫死在程式中：手續費 <code id="feeRateDisplay">0.1425%</code>（最低 20 元）、股票證交稅 0.3%、ETF 證交稅 0.1%。要改費率請改 <code>app.js</code> 的 <code>FEE</code> 常數。</p>
       </div>
       <div class="panel">
-        <h3>資料備份 / 還原</h3>
-        <p class="small">瀏覽器中目前儲存的資料。建議定期匯出備份。</p>
-        <div style="display:flex;gap:8px;flex-wrap:wrap">
-          <button class="btn ghost" id="exportSettings">匯出設定 JSON</button>
-          <button class="btn ghost" id="importSettings">匯入設定 JSON</button>
-          <input type="file" id="importFile" accept="application/json" style="display:none">
-          <button class="btn warn" id="clearAll">清除所有本機資料</button>
-        </div>
+        <h3>本機資料清理</h3>
+        <p class="small">所有交易紀錄都直接寫進 Google Sheets，本機只保留少數設定（編輯覆寫）。</p>
+        <button class="btn warn" id="clearAll">清除所有本機資料</button>
       </div>
     </section>
   </main>
