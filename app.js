@@ -53,6 +53,9 @@ function fmtLotsParts(units){
   return { lots: `${lots}張`, odd: odd > 0 ? `+${oddStr}股` : '' };
 }
 
+// ---------- 版號（改前端就 +1，方便比對線上是不是最新）----------
+const APP_VERSION = 'fe-2026-06-09-01';
+
 // ---------- 全域 state ----------
 // Apps Script URL 寫死，不再讀 localStorage（避免不同裝置漏設）
 const SHEETS_URL = 'https://script.google.com/macros/s/AKfycbyr_2Z8YyWgQ6MeHSApg0yLURtQVnCFLSr2rAOHE54hvOzoh-BoKOTdmesEVievWoht/exec';
@@ -1774,21 +1777,37 @@ function renderAddTab(){
       if (!confirm(`全部賣出 ${STATE.data.code_to_name[code]||code}：\n${openLots.length} 個買進批次${stockDiv>0?` + 配股 ${fmt(stockDiv)} 股`:''}\n全部以 ${sp} 賣出（日期 ${sd}）？`)) return;
       flashMsg('#sellMsg', '⏳ 全部賣出更新中…');
       $('#submitSell').disabled = true;
+      // 先檢查每筆都有 row_idx（沒有代表 Apps Script doRead 還沒回傳 row_idx → 不能更新）
+      const noRowIdx = openLots.filter(l => {
+        const rec = STATE.data.records.find(r => r._id === l._id);
+        return !rec || !rec.row_idx;
+      });
+      if (noRowIdx.length > 0){
+        flashMsg('#sellMsg', `✗ 這些批次缺 row_idx，無法寫回 Sheets。請把 Apps Script 整檔重貼並「部署新版本」（doRead 要回傳 row_idx）`, true);
+        $('#submitSell').disabled = false;
+        return;
+      }
       try {
+        const beforeOpen = openLots.length;
         for (let i = 0; i < openLots.length; i++){
           const l = openLots[i];
           const rec = STATE.data.records.find(r => r._id === l._id);
-          if (!rec || !rec.row_idx) continue;
-          // 配股零股加到最後一批（用 oversold 機制吸收）
           let units = l.units;
-          if (i === openLots.length - 1) units += stockDiv;
+          if (i === openLots.length - 1) units += stockDiv;   // 配股零股加到最後一批
           await postToSheets('update', {
             row_idx: rec.row_idx,
             fields: { sell_date: sd, sell_price: sp, sell_units: units, sell_total: sp * units }
           });
         }
         await loadFromSheets();
-        flashMsg('#sellMsg', `✔ 已全部賣出 @ ${sp}`);
+        // 驗證：該檔還有沒有未賣的買進批次
+        const { lots: lots2 } = buildLots();
+        const stillOpen = lots2.filter(l => l.code === code && !l.sell_date).length;
+        if (stillOpen === 0){
+          flashMsg('#sellMsg', `✔ 已全部賣出 @ ${sp}（${beforeOpen} 批）`);
+        } else {
+          flashMsg('#sellMsg', `⚠ 送出了，但 ${code} 還有 ${stillOpen} 批沒標記賣出。多半是寫入授權沒給：到 Apps Script 執行 testWrite 一次再重部署`, true);
+        }
         $('#sellPrice').value='';
         refreshOpenLots();
         renderAll();
@@ -2142,7 +2161,8 @@ function renderAll(){
   renderMonthly();
   if (!$('#tab-annual').hidden) renderAnnual();
   if (!$('#tab-add').hidden) renderAddTab();
-  $('#footStat').textContent = `Excel ${STATE.data.records.length} 筆 + 自建 ${STATE.userRecords.length} 筆 / ${Object.keys(STATE.data.code_to_name).length} 檔股票`;
+  const gasVer = (STATE.data && STATE.data.gas_version) ? STATE.data.gas_version : '(未知)';
+  $('#footStat').textContent = `${STATE.data.records.length} 筆 / ${Object.keys(STATE.data.code_to_name).length} 檔　·　前端 ${APP_VERSION}　·　GAS ${gasVer}`;
 }
 
 async function initApp(){

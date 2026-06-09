@@ -13,6 +13,8 @@
  */
 
 const SHEET_NAME = '股票';
+// 版號：改 GAS 就 +1，會回傳在 doRead 的 JSON，方便比對線上是不是最新
+const GAS_VERSION = 'gas-2026-06-09-01';
 
 function doGet(e) {
   const action = (e && e.parameter && e.parameter.action) || 'read';
@@ -188,6 +190,7 @@ function doRead() {
     code_to_name: codeToName,
     etf_codes: ['0050','0056','00713','00878','00881','00919','00929','00937B'],
     latest_prices: {},
+    gas_version: GAS_VERSION,
     updated_at: new Date().toISOString().slice(0,16).replace('T',' ')
   });
 }
@@ -288,6 +291,7 @@ function doFetchPrices(e) {
     found_count: Object.keys(updates).length,
     total: codes.length,
     missing: codes.filter(c => !found.has(c)),
+    gas_version: GAS_VERSION,
     errors: errors
   });
 }
