@@ -153,20 +153,33 @@ function normalizeDate(v){
 }
 
 // 寫入 Sheets：append / update
-// 用 Content-Type: text/plain 送 JSON，避免 Apps Script 不支援的 CORS preflight
+// 先試正常 fetch（能讀回應、抓得到錯誤）；如果被 CORS 擋（throw），改用 no-cors 再送一次
+// no-cors 模式：請求會送出、Apps Script 照樣寫入，但前端讀不到回應（呼叫端用 loadFromSheets 比對筆數驗證）
 async function postToSheets(action, payload){
   if (!STATE.sheetsUrl) throw new Error('SHEETS_URL 沒設定');
   const body = JSON.stringify({ action, ...payload });
-  const r = await fetch(STATE.sheetsUrl, {
-    method: 'POST',
-    headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-    body,
-    redirect: 'follow',
-  });
-  if (!r.ok) throw new Error('HTTP ' + r.status);
-  const json = await r.json();
-  if (json.error) throw new Error(json.error);
-  return json;
+  try {
+    const r = await fetch(STATE.sheetsUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body,
+      redirect: 'follow',
+    });
+    if (!r.ok) throw new Error('HTTP ' + r.status);
+    const json = await r.json();
+    if (json.error) throw new Error(json.error);
+    return json;
+  } catch (e) {
+    // CORS / 讀回應失敗 → 改用 no-cors 重送（寫入會成功，只是讀不到回應）
+    console.warn('正常 POST 失敗，改用 no-cors 重送：', e.message);
+    await fetch(STATE.sheetsUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body,
+      mode: 'no-cors',
+    });
+    return { ok: true, opaque: true };   // 無法確認，呼叫端要 loadFromSheets 比對
+  }
 }
 
 // 從 Google Apps Script Web App 載入資料（取代 data.js）
@@ -1642,13 +1655,19 @@ function renderAddTab(){
     };
     flashMsg('#buyMsg', '⏳ 寫入 Sheets…');
     $('#submitBuy').disabled = true;
+    const before = STATE.data.records.length;
     try {
       await postToSheets('append', { row });
       await loadFromSheets();
-      flashMsg('#buyMsg', `✔ 已寫入 Sheets：${row.name} ${row.units} 股 @ ${row.buy_price}`);
-      ['#buyPrice','#buyUnits'].forEach(s => $(s).value='');
-      recalcBuy();
-      renderAll();
+      const after = STATE.data.records.length;
+      if (after > before){
+        flashMsg('#buyMsg', `✔ 已寫入 Sheets：${row.name} ${row.units} 股 @ ${row.buy_price}`);
+        ['#buyPrice','#buyUnits'].forEach(s => $(s).value='');
+        recalcBuy();
+        renderAll();
+      } else {
+        flashMsg('#buyMsg', `⚠ 送出後 Sheets 筆數沒增加（${before}→${after}）。多半是 Apps Script 寫入授權沒給：請到編輯器執行 testWrite 一次再重部署`, true);
+      }
     } catch (e) {
       flashMsg('#buyMsg', `✗ 寫入失敗：${e.message}`, true);
     } finally {
@@ -1716,12 +1735,17 @@ function renderAddTab(){
     };
     flashMsg('#divMsg', '⏳ 寫入 Sheets…');
     $('#submitDiv').disabled = true;
+    const beforeD = STATE.data.records.length;
     try {
       await postToSheets('append', { row });
       await loadFromSheets();
-      flashMsg('#divMsg', `✔ 已寫入 Sheets：${row.name} 配息 ${fmt(amount)} 元`);
-      $('#divPerShare').value=''; $('#divUnitsCalc').value='';
-      renderAll();
+      if (STATE.data.records.length > beforeD){
+        flashMsg('#divMsg', `✔ 已寫入 Sheets：${row.name} 配息 ${fmt(amount)} 元`);
+        $('#divPerShare').value=''; $('#divUnitsCalc').value='';
+        renderAll();
+      } else {
+        flashMsg('#divMsg', `⚠ 送出後筆數沒增加，寫入授權可能沒給（執行 testWrite 再重部署）`, true);
+      }
     } catch (e) {
       flashMsg('#divMsg', `✗ 寫入失敗：${e.message}`, true);
     } finally {
@@ -1773,12 +1797,17 @@ function renderAddTab(){
     };
     flashMsg('#sdMsg', '⏳ 寫入 Sheets…');
     $('#submitSd').disabled = true;
+    const beforeS = STATE.data.records.length;
     try {
       await postToSheets('append', { row });
       await loadFromSheets();
-      flashMsg('#sdMsg', `✔ 已寫入 Sheets：${row.name} 配股 ${fmt(u)} 股`);
-      $('#sdUnits').value='';
-      renderAll();
+      if (STATE.data.records.length > beforeS){
+        flashMsg('#sdMsg', `✔ 已寫入 Sheets：${row.name} 配股 ${fmt(u)} 股`);
+        $('#sdUnits').value='';
+        renderAll();
+      } else {
+        flashMsg('#sdMsg', `⚠ 送出後筆數沒增加，寫入授權可能沒給（執行 testWrite 再重部署）`, true);
+      }
     } catch (e) {
       flashMsg('#sdMsg', `✗ 寫入失敗：${e.message}`, true);
     } finally {
@@ -1789,11 +1818,14 @@ function renderAddTab(){
   renderUserRecordsList();
 }
 
-function flashMsg(sel, text){
+function flashMsg(sel, text, isError){
   const el = $(sel);
+  if (!el) return;
   el.textContent = text;
-  el.className = 'small green';
-  setTimeout(()=>{ el.textContent=''; }, 4000);
+  el.className = 'small ' + (isError ? 'red' : 'green');
+  // 錯誤訊息留久一點（10 秒），成功訊息 4 秒
+  if (el._t) clearTimeout(el._t);
+  el._t = setTimeout(()=>{ el.textContent=''; }, isError ? 10000 : 4000);
 }
 
 function renderUserRecordsList(){
@@ -1865,8 +1897,8 @@ async function openLotEditor(id){
   if (!r) return;
   let msg = `${r.name} ${r.code}\n買進 ${r.buy_date} @ ${r.buy_price} × ${r.units}股 (${r.who||'我'})`;
   if (r.sell_date) msg += `\n已賣出 ${r.sell_date} @ ${r.sell_price}`;
-  msg += '\n\n選擇操作：\n1. 標記為已賣出 / 修改賣出資訊\n2. 移除賣出標記 (回復為持有)';
-  const act = prompt(msg + '\n\n輸入 1 / 2：');
+  msg += '\n\n選擇操作：\n1. 標記為已賣出 / 修改賣出資訊\n2. 移除賣出標記 (回復為持有)\n3. 刪除整筆 (從 Sheets 移除這列)';
+  const act = prompt(msg + '\n\n輸入 1 / 2 / 3：');
   try {
     if (act==='1'){
       const sd = prompt('賣出日期 (YYYY-MM-DD)：', r.sell_date || todayISO()); if(!sd) return;
@@ -1881,9 +1913,35 @@ async function openLotEditor(id){
       await updateSheetRow(id, { sell_date: '', sell_price: '', sell_units: '', sell_total: '' });
       await loadFromSheets();
       renderAll();
+    } else if (act==='3'){
+      await deleteSheetRow(id, r);
     }
   } catch (e) {
     alert('寫入 Sheets 失敗：' + e.message);
+  }
+}
+
+// 從 Sheets 刪除整列（帶代碼/名稱防呆，避免 row_idx 對不上刪錯）
+async function deleteSheetRow(id, r){
+  const rec = STATE.data.records.find(x => x._id === id);
+  if (!rec || !rec.row_idx){
+    alert('找不到對應的 Sheets 列（請先重新從 Sheets 載入）');
+    return;
+  }
+  const desc = `${r.name} ${r.code}　${r.who||''}　${r.buy_date||r.sell_date||''}`;
+  if (!confirm(`確定刪除這整筆？此動作會從 Google Sheets 永久移除：\n\n${desc}\n\n（無法復原）`)) return;
+  const before = STATE.data.records.length;
+  await postToSheets('delete', {
+    row_idx: rec.row_idx,
+    expect_code: rec.code != null ? String(rec.code) : '',
+    expect_name: rec.name != null ? String(rec.name) : ''
+  });
+  await loadFromSheets();
+  if (STATE.data.records.length < before){
+    renderAll();
+    alert('✔ 已從 Sheets 刪除');
+  } else {
+    alert('⚠ 送出後筆數沒減少，可能刪除失敗（授權？或 row_idx 對不上）');
   }
 }
 

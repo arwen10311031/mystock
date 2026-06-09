@@ -33,6 +33,7 @@ function doPost(e) {
     const action = body.action || '';
     if (action === 'append') return doAppendRow(body);
     if (action === 'update') return doUpdateRow(body);
+    if (action === 'delete') return doDeleteRow(body);
     throw new Error('未知 action: ' + action);
   } catch (err) {
     return jsonOut({ error: err.message });
@@ -44,8 +45,7 @@ function doAppendRow(body) {
   const sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) throw new Error('找不到分頁「' + SHEET_NAME + '」');
   const r = body.row || {};
-  // 欄位順序必須跟 doRead 的 destructure 一致
-  sheet.appendRow([
+  const rowData = [
     r.who || '',
     r.year != null ? r.year : '',
     r.buy_date || '',
@@ -60,8 +60,26 @@ function doAppendRow(body) {
     r.sell_total != null ? r.sell_total : '',
     r.dividend != null ? r.dividend : '',
     r.ex_date || ''
-  ]);
-  return jsonOut({ ok: true, action: 'append', row: r });
+  ];
+  const newRow = sheet.getLastRow() + 1;
+
+  // 先寫整列（代碼欄先留空，避免 setValues 自動偵測把 00919 變 919）
+  const rowDataNoCode = rowData.slice();
+  rowDataNoCode[4] = '';   // 代碼欄(第5欄)先空著
+  sheet.getRange(newRow, 1, 1, rowDataNoCode.length).setValues([rowDataNoCode]);
+
+  // 文字欄位（代碼 + 三個日期）：明確設文字格式 → flush → 單獨寫值
+  const codeCell = sheet.getRange(newRow, 5);
+  codeCell.setNumberFormat('@');
+  sheet.getRange(newRow, 3).setNumberFormat('@');
+  sheet.getRange(newRow, 9).setNumberFormat('@');
+  sheet.getRange(newRow, 14).setNumberFormat('@');
+  SpreadsheetApp.flush();
+  // 用 setValue（單格）寫代碼，文字格式下 00919 會原樣保留
+  codeCell.setValue(String(r.code != null ? r.code : ''));
+  SpreadsheetApp.flush();
+
+  return jsonOut({ ok: true, action: 'append', row: r, row_idx: newRow });
 }
 
 function doUpdateRow(body) {
@@ -87,6 +105,28 @@ function doUpdateRow(body) {
     updated[key] = v;
   }
   return jsonOut({ ok: true, action: 'update', row_idx: rowIdx, updated: updated });
+}
+
+function doDeleteRow(body) {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) throw new Error('找不到分頁「' + SHEET_NAME + '」');
+  const rowIdx = parseInt(body.row_idx, 10);
+  if (!rowIdx || rowIdx < 2) throw new Error('row_idx 無效：' + body.row_idx);
+  // 防呆：可選 expect_code/expect_name 比對，避免因 row_idx 對不上而刪錯
+  if (body.expect_code != null || body.expect_name != null) {
+    const cur = sheet.getRange(rowIdx, 1, 1, 5).getValues()[0];
+    const curCode = String(cur[4] == null ? '' : cur[4]);
+    const curName = String(cur[3] == null ? '' : cur[3]);
+    if (body.expect_code != null && curCode !== String(body.expect_code)) {
+      throw new Error('防呆失敗：第 ' + rowIdx + ' 列代碼是 ' + curCode + '，跟預期 ' + body.expect_code + ' 不符，已取消刪除');
+    }
+    if (body.expect_name != null && curName !== String(body.expect_name)) {
+      throw new Error('防呆失敗：第 ' + rowIdx + ' 列名稱是 ' + curName + '，跟預期 ' + body.expect_name + ' 不符，已取消刪除');
+    }
+  }
+  sheet.deleteRow(rowIdx);
+  return jsonOut({ ok: true, action: 'delete', row_idx: rowIdx });
 }
 
 // ─── 讀 Google Sheets ──────────────────────────────────
@@ -365,6 +405,24 @@ function testFetch() {
   Logger.log('應該看到 200，代表外部 URL 權限已通');
 }
 
+// ─── 寫入授權測試 ──────────────────────────────────────
+// 新增 doPost（寫入 Sheets）後，第一次要在編輯器手動執行這個函式
+// 會跳出授權對話框，要點「進階 → 允許」勾「以您的名義查看及管理試算表」
+// 授權通過後，網站的「➕ 新增」才寫得進 Sheets
+function testWrite() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  if (!sheet) { Logger.log('找不到分頁 ' + SHEET_NAME); return; }
+  // 寫一列測試資料到最後，再馬上刪掉（只是為了觸發寫入授權）
+  const before = sheet.getLastRow();
+  sheet.appendRow(['__TEST__', '', '', '寫入測試', '', '', '', '', '', '', '', '', '', '']);
+  const after = sheet.getLastRow();
+  Logger.log('寫入測試列：' + before + ' → ' + after);
+  // 刪掉剛剛那列
+  sheet.deleteRow(after);
+  Logger.log('已刪除測試列，寫入權限 OK');
+}
+
 // ─── helpers ──────────────────────────────────────────
 function jsonOut(obj) {
   return ContentService
@@ -387,6 +445,48 @@ function savePriceCache(updates, priceDate) {
     items['lp_' + code] = JSON.stringify({ price: p, date: priceDate || '', ts: Date.now() });
   }
   if (Object.keys(items).length > 0) props.setProperties(items, false);
+}
+
+// 一次性修復：把被吃掉開頭 0 的代碼補回來（在編輯器手動執行一次）
+// 原理：用「股票名稱」對照，從有正確代碼（開頭 0 還在）的列建 name→code 表，
+//       再把代碼跟正確值不符的列改回來
+function repairCodes() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheet = ss.getSheetByName(SHEET_NAME);
+  const values = sheet.getDataRange().getValues();
+
+  // 建 name → 正確代碼（優先採用開頭是 0 的文字代碼）
+  const nameToCode = {};
+  for (var i = 1; i < values.length; i++) {
+    const name = values[i][3];   // D 欄 股票名稱
+    const code = values[i][4];   // E 欄 代碼
+    if (!name || code == null || code === '') continue;
+    const codeStr = String(code);
+    if (codeStr.length >= 4 && codeStr.charAt(0) === '0') {
+      nameToCode[name] = codeStr;   // 像 00919 / 0050 這種完整的
+    }
+  }
+
+  // 把代碼跟正確值不符的列改回來
+  var fixed = 0;
+  const detail = [];
+  for (var j = 1; j < values.length; j++) {
+    const name = values[j][3];
+    const code = values[j][4];
+    if (!name || code == null || code === '') continue;
+    const correct = nameToCode[name];
+    if (correct && String(code) !== correct) {
+      const cell = sheet.getRange(j + 1, 5);
+      cell.setNumberFormat('@');
+      cell.setValue(correct);
+      fixed++;
+      detail.push((j + 1) + ': ' + name + ' ' + code + ' → ' + correct);
+    }
+  }
+  SpreadsheetApp.flush();
+  Logger.log('修正了 ' + fixed + ' 列');
+  detail.forEach(function(d){ Logger.log('  ' + d); });
+  return fixed;
 }
 
 // 清掉所有股價 cache（在編輯器手動執行一次即可）
