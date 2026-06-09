@@ -54,7 +54,7 @@ function fmtLotsParts(units){
 }
 
 // ---------- 版號（改前端就 +1，方便比對線上是不是最新）----------
-const APP_VERSION = 'fe-2026-06-09-01';
+const APP_VERSION = 'fe-2026-06-09-02';
 
 // ---------- 全域 state ----------
 // Apps Script URL 寫死，不再讀 localStorage（避免不同裝置漏設）
@@ -466,6 +466,16 @@ function buildHoldings(period){
   for (const sd of stockDivs){
     if (period && !codeInPeriod.has(sd.code)) continue;  // 期間模式：只算「期間內買進的股票」配股
     const a = ensure(sd.code, sd.name);
+    // 配股已賣出 → 算實現損益（配股成本 0，賣出淨收全是獲利），不算持股
+    if (sd.sell_date){
+      const sellU = (sd.sell_units != null && sd.sell_units > 0) ? sd.sell_units : (sd.units||0);
+      const sellAmt = (sd.sell_price||0) * sellU;
+      const sellFee = feeOf(sellAmt);
+      const sellTax = taxOf(sd.code, sellAmt);
+      a.realized += (sellAmt - sellFee - sellTax);   // cost 0
+      a.sellLots += 1;
+      continue;
+    }
     const sdDate = sd.ex_date || sd.buy_date;
     if (sdDate && sdDate > today){
       if (!period) a.futureStockDivUnits = (a.futureStockDivUnits||0) + (sd.units||0);
@@ -1670,8 +1680,8 @@ function renderAddTab(){
   const fillSellUnits = () => {
     const lotId = $('#sellLot').value;
     const code = sellStockSel.value;
-    const { lots } = buildLots();
-    const lot = lots.find(l => l._id === lotId);
+    const { lots, stockDivs } = buildLots();
+    const lot = lots.find(l => l._id === lotId) || stockDivs.find(s => s._id === lotId);
     const totalHeld = map[code] ? map[code].units : 0;
     const stockDiv = map[code] ? (map[code].stockDivUnits||0) : 0;
     const unitsInput = $('#sellUnits');
@@ -1694,14 +1704,19 @@ function renderAddTab(){
     const code = sellStockSel.value;
     const select = $('#sellLot');
     select.innerHTML='';
-    const { lots } = buildLots();
+    const today = todayISO();
+    const { lots, stockDivs } = buildLots();
     const open = lots.filter(l => l.code === code && !l.sell_date);
     open.sort((a,b)=>(a.buy_date||'').localeCompare(b.buy_date||''));
-    // 第一個選項：全部賣出（所有批次 + 配股零股）
-    if (open.length > 0){
+    // 未賣、已入帳的配股列（也可以賣）
+    const openSd = stockDivs.filter(s => s.code === code && !s.sell_date && (s.units||0) > 0
+      && ((s.ex_date||s.buy_date||'') <= today));
+    const totalSellable = open.length + openSd.length;
+    // 第一個選項：全部賣出（所有買進批次 + 配股）
+    if (totalSellable > 0){
       const oAll = document.createElement('option');
       oAll.value = '__ALL__';
-      oAll.textContent = `★ 全部賣出（${open.length} 批 + 配股零股）`;
+      oAll.textContent = `★ 全部賣出（${open.length} 批${openSd.length>0?` + 配股 ${openSd.length} 筆`:''}）`;
       select.appendChild(oAll);
     }
     for (const l of open){
@@ -1710,7 +1725,13 @@ function renderAddTab(){
       o.textContent = `${l.buy_date} | ${fmt2(l.buy_price)} × ${fmt(l.units)}股 (${l.who||'我'})`;
       select.appendChild(o);
     }
-    if (open.length===0){
+    for (const s of openSd){
+      const o = document.createElement('option');
+      o.value = s._id;
+      o.textContent = `🎁配股 ${s.buy_date||s.ex_date||''} × ${fmt(s.units)}股`;
+      select.appendChild(o);
+    }
+    if (totalSellable===0){
       const o = document.createElement('option');
       o.value=''; o.textContent='—— 沒有可賣的批次 ——';
       select.appendChild(o);
@@ -1767,46 +1788,43 @@ function renderAddTab(){
     if (!lotId){ alert('沒有可賣的批次'); return; }
     if (!sd || !sp){ alert('請填完整：日期、賣價'); return; }
 
-    // ── 全部賣出：把該檔所有未賣買進批次都標記賣出，配股零股加到最後一批 ──
+    const today2 = todayISO();
+
+    // ── 全部賣出：所有未賣買進批次 + 所有未賣配股，全部標記賣出 ──
     if (lotId === '__ALL__'){
-      const { lots } = buildLots();
+      const { lots, stockDivs } = buildLots();
       const openLots = lots.filter(l => l.code === code && !l.sell_date)
                            .sort((a,b)=>(a.buy_date||'').localeCompare(b.buy_date||''));
-      if (openLots.length === 0){ alert('沒有可賣的批次'); return; }
-      const stockDiv = map[code] ? (map[code].stockDivUnits||0) : 0;  // 配股零股
-      if (!confirm(`全部賣出 ${STATE.data.code_to_name[code]||code}：\n${openLots.length} 個買進批次${stockDiv>0?` + 配股 ${fmt(stockDiv)} 股`:''}\n全部以 ${sp} 賣出（日期 ${sd}）？`)) return;
-      flashMsg('#sellMsg', '⏳ 全部賣出更新中…');
-      $('#submitSell').disabled = true;
-      // 先檢查每筆都有 row_idx（沒有代表 Apps Script doRead 還沒回傳 row_idx → 不能更新）
-      const noRowIdx = openLots.filter(l => {
-        const rec = STATE.data.records.find(r => r._id === l._id);
-        return !rec || !rec.row_idx;
-      });
-      if (noRowIdx.length > 0){
-        flashMsg('#sellMsg', `✗ 這些批次缺 row_idx，無法寫回 Sheets。請把 Apps Script 整檔重貼並「部署新版本」（doRead 要回傳 row_idx）`, true);
-        $('#submitSell').disabled = false;
+      const openSd = stockDivs.filter(s => s.code === code && !s.sell_date && (s.units||0) > 0
+        && ((s.ex_date||s.buy_date||'') <= today2));
+      const targets = openLots.concat(openSd);   // 全部要標記賣出的列
+      if (targets.length === 0){ alert('沒有可賣的批次'); return; }
+      // 檢查 row_idx
+      const missing = targets.filter(l => { const rec = STATE.data.records.find(r => r._id === l._id); return !rec || !rec.row_idx; });
+      if (missing.length > 0){
+        flashMsg('#sellMsg', `✗ 有 ${missing.length} 列缺 row_idx，無法寫回。請重貼 Apps Script 並部署新版本`, true);
         return;
       }
+      if (!confirm(`全部賣出 ${STATE.data.code_to_name[code]||code}：\n${openLots.length} 個買進批次${openSd.length>0?` + 配股 ${openSd.length} 筆`:''}\n全部以 ${sp} 賣出（日期 ${sd}）？`)) return;
+      flashMsg('#sellMsg', '⏳ 全部賣出更新中…');
+      $('#submitSell').disabled = true;
       try {
-        const beforeOpen = openLots.length;
-        for (let i = 0; i < openLots.length; i++){
-          const l = openLots[i];
+        for (const l of targets){
           const rec = STATE.data.records.find(r => r._id === l._id);
-          let units = l.units;
-          if (i === openLots.length - 1) units += stockDiv;   // 配股零股加到最後一批
+          const units = l.units;
           await postToSheets('update', {
             row_idx: rec.row_idx,
             fields: { sell_date: sd, sell_price: sp, sell_units: units, sell_total: sp * units }
           });
         }
         await loadFromSheets();
-        // 驗證：該檔還有沒有未賣的買進批次
-        const { lots: lots2 } = buildLots();
-        const stillOpen = lots2.filter(l => l.code === code && !l.sell_date).length;
+        const { lots: lots2, stockDivs: sd2 } = buildLots();
+        const stillOpen = lots2.filter(l => l.code === code && !l.sell_date).length
+          + sd2.filter(s => s.code === code && !s.sell_date && (s.units||0) > 0 && ((s.ex_date||s.buy_date||'') <= today2)).length;
         if (stillOpen === 0){
-          flashMsg('#sellMsg', `✔ 已全部賣出 @ ${sp}（${beforeOpen} 批）`);
+          flashMsg('#sellMsg', `✔ 已全部賣出 @ ${sp}（${targets.length} 筆）`);
         } else {
-          flashMsg('#sellMsg', `⚠ 送出了，但 ${code} 還有 ${stillOpen} 批沒標記賣出。多半是寫入授權沒給：到 Apps Script 執行 testWrite 一次再重部署`, true);
+          flashMsg('#sellMsg', `⚠ 送出了，但 ${code} 還有 ${stillOpen} 筆沒標記賣出。多半是寫入授權沒給：到 Apps Script 執行 testWrite 再重部署`, true);
         }
         $('#sellPrice').value='';
         refreshOpenLots();
@@ -1819,9 +1837,9 @@ function renderAddTab(){
       return;
     }
 
-    // ── 單一批次賣出 ──
+    // ── 單一批次賣出（買進批次 或 配股列都適用）──
     const lot = STATE.data.records.find(r => r._id === lotId);
-    if (!lot){ alert('找不到對應的買進批次'); return; }
+    if (!lot){ alert('找不到對應的批次'); return; }
     if (!lot.row_idx){ alert('row_idx 缺失，請先重新部署 Apps Script'); return; }
     let sellUnits = parseFloat($('#sellUnits').value);
     if (!sellUnits || sellUnits <= 0) sellUnits = lot.units;
