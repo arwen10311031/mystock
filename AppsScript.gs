@@ -16,12 +16,25 @@ const SHEET_NAME = '股票';
 
 function doGet(e) {
   const action = (e && e.parameter && e.parameter.action) || 'read';
+  const callback = e && e.parameter && e.parameter.callback;  // JSONP callback 名稱
   try {
-    if (action === 'prices') return doFetchPrices(e);
-    return doRead();
+    let out;
+    if (action === 'prices') out = doFetchPrices(e);
+    else out = doRead();
+    return wrapOut(out, callback);
   } catch (err) {
-    return jsonOut({ error: err.message });
+    return wrapOut(jsonOut({ error: err.message }), callback);
   }
+}
+
+// 如果有帶 callback（JSONP），把 JSON 包成 callback(...) 並用 JS mimetype 回傳
+// 沒帶就回原本的 JSON（給直接打網址 / fetch 用）
+function wrapOut(textOutput, callback) {
+  if (!callback) return textOutput;
+  const json = textOutput.getContent();
+  return ContentService
+    .createTextOutput(callback + '(' + json + ')')
+    .setMimeType(ContentService.MimeType.JAVASCRIPT);
 }
 
 // 寫入：append (新增列) 或 update (改某列特定欄位)

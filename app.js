@@ -182,14 +182,46 @@ async function postToSheets(action, payload){
   }
 }
 
+// JSONP GET：用 <script> 標籤載入 Apps Script，完全繞過 CORS
+// Apps Script doGet 看到 ?callback=xxx 就會回 xxx({...})
+function jsonpGet(baseUrl, params){
+  return new Promise((resolve, reject) => {
+    const cbName = '__jsonp_' + Date.now() + '_' + Math.floor(Math.random()*100000);
+    const sep = baseUrl.indexOf('?') >= 0 ? '&' : '?';
+    const qs = Object.keys(params || {}).map(k => k + '=' + encodeURIComponent(params[k])).join('&');
+    const url = baseUrl + sep + (qs ? qs + '&' : '') + 'callback=' + cbName + '&_=' + Date.now();
+    const script = document.createElement('script');
+    let done = false;
+    const cleanup = () => {
+      try { delete window[cbName]; } catch(e){ window[cbName] = undefined; }
+      if (script.parentNode) script.parentNode.removeChild(script);
+    };
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true; cleanup();
+      reject(new Error('JSONP 逾時（15 秒）'));
+    }, 15000);
+    window[cbName] = (data) => {
+      if (done) return;
+      done = true; clearTimeout(timer); cleanup();
+      resolve(data);
+    };
+    script.onerror = () => {
+      if (done) return;
+      done = true; clearTimeout(timer); cleanup();
+      reject(new Error('JSONP 載入失敗'));
+    };
+    script.src = url;
+    document.head.appendChild(script);
+  });
+}
+
 // 從 Google Apps Script Web App 載入資料（取代 data.js）
 async function loadFromSheets(){
   const url = STATE.sheetsUrl;
   if (!url) return false;
   try {
-    const r = await fetch(url + '?_=' + Date.now(), {cache:'no-store'});
-    if (!r.ok) throw new Error('HTTP '+r.status);
-    const json = await r.json();
+    const json = await jsonpGet(url, { action: 'read' });
     if (json.error) throw new Error(json.error);
     // 不再保留 data.js 的 latest_prices；股價由 GAS 即時抓
     json.latest_prices = {};
@@ -1371,11 +1403,8 @@ async function fetchPricesViaGAS(mode, overrideCodes){
     return;
   }
 
-  const url = STATE.sheetsUrl + '?action=prices&codes=' + codes.join(',') + '&mode=' + (mode||'auto');
   try {
-    const r = await fetch(url, {cache:'no-store'});
-    if (!r.ok) throw new Error('HTTP '+r.status);
-    const json = await r.json();
+    const json = await jsonpGet(STATE.sheetsUrl, { action: 'prices', codes: codes.join(','), mode: mode || 'auto' });
     if (json.error) throw new Error(json.error);
 
     const got = Object.keys(json.prices || {}).length;
