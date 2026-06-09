@@ -54,7 +54,7 @@ function fmtLotsParts(units){
 }
 
 // ---------- 版號（改前端就 +1，方便比對線上是不是最新）----------
-const APP_VERSION = 'fe-2026-06-09-02';
+const APP_VERSION = 'fe-2026-06-09-03';
 
 // ---------- 全域 state ----------
 // Apps Script URL 寫死，不再讀 localStorage（避免不同裝置漏設）
@@ -326,6 +326,31 @@ function enrichLot(lot){
 }
 
 function daysBetween(a, b){ if(!a||!b) return 0; return Math.round((Date.parse(b)-Date.parse(a))/86400000); }
+
+// 配股當成「成本 0 的批次」來呈現在交易紀錄
+function enrichStockDiv(sd){
+  const code = sd.code;
+  const result = { ...sd, buyAmt: 0, buyFee: 0, buyCost: 0, isStockDiv: true };
+  if (sd.sell_date){
+    const sellU = (sd.sell_units != null && sd.sell_units > 0) ? sd.sell_units : (sd.units||0);
+    const sellAmt = (sd.sell_price||0) * sellU;
+    const sellFee = feeOf(sellAmt);
+    const sellTax = taxOf(code, sellAmt);
+    const sellNet = sellAmt - sellFee - sellTax;
+    result.status = 'realized';
+    result.sellUnits = sellU;
+    Object.assign(result, { sellAmt, sellFee, sellTax, sellNet, profit: sellNet, ret: null, days: null, annual: null });
+  } else {
+    const cur = STATE.prices[code];
+    result.status = 'held';
+    if (cur != null){
+      result.curPrice = cur;
+      result.curVal = cur * (sd.units||0);
+      result.profit = result.curVal;   // 成本 0，市值即獲利
+    }
+  }
+  return result;
+}
 
 // 回放交易紀錄：算出除息日「前一日」收盤時持有的股數（即可參加除息的張數）
 // 規則：必須在 exDate 之前就持有，且 exDate 當日未賣出。
@@ -971,16 +996,21 @@ function renderHoldings(){
 // ---------- 交易 ----------
 let _tradesSort = {key:'buy_date', dir:-1};
 function renderTrades(){
-  const { lots } = buildLots();
+  const { lots, stockDivs } = buildLots();
   if ($('#tradeStock').options.length<=1){
-    const codes = [...new Set(lots.map(l=>l.code))].sort();
+    const codes = [...new Set(lots.map(l=>l.code).concat(stockDivs.map(s=>s.code)))].sort();
     for (const c of codes){
       const o = document.createElement('option');
       o.value = c; o.textContent = `${c} ${STATE.data.code_to_name[c]||''}`;
       $('#tradeStock').appendChild(o);
     }
   }
-  const enriched = lots.map(enrichLot);
+  // 配股也列進來（已入帳的；未來配股不顯示）
+  const today = todayISO();
+  const sdRows = stockDivs
+    .filter(s => (s.ex_date||s.buy_date||'') <= today)
+    .map(enrichStockDiv);
+  const enriched = lots.map(enrichLot).concat(sdRows);
   let rows = enriched;
   const sel = $('#tradeStock').value, stat = $('#tradeStatus').value;
   if (sel) rows = rows.filter(r=>r.code===sel);
@@ -1006,13 +1036,14 @@ function renderTrades(){
       ? `<td>${r.sell_date||''}</td><td class="num">${fmt2(r.sell_price)}</td><td class="num">${fmt(r.sellNet)}</td>`
       : `<td class="sub">-</td><td class="num sub">${r.curPrice!=null?fmt2(r.curPrice):'-'}</td><td class="num sub">${r.curVal!=null?fmt(r.curVal):'-'}</td>`;
     const editBtn = `<button class="iconbtn" data-act="edit-lot" data-id="${r._id}" title="編輯/刪除">⋮</button>`;
+    const sdBadge = r.isStockDiv ? '<span class="badge etf" style="margin-left:4px">🎁配股</span>' : '';
     tr.innerHTML = `
-      <td>${status}${isUser?'<span class="badge etf" style="margin-left:4px">新</span>':''}${isOverridden && !isUser?'<span class="badge etf" style="margin-left:4px">改</span>':''}</td>
+      <td>${status}${sdBadge}${isUser?'<span class="badge etf" style="margin-left:4px">新</span>':''}${isOverridden && !isUser?'<span class="badge etf" style="margin-left:4px">改</span>':''}</td>
       <td>${r.name} <span class="sub">${r.code}</span></td>
       <td>${r.buy_date||''}</td>
-      <td class="num">${fmt2(r.buy_price)}</td>
+      <td class="num">${r.isStockDiv ? '<span class="sub">配股</span>' : fmt2(r.buy_price)}</td>
       <td class="num">${fmt(r.units)}</td>
-      <td class="num">${fmt(r.buyCost)}</td>
+      <td class="num">${r.isStockDiv ? '<span class="sub">0</span>' : fmt(r.buyCost)}</td>
       ${sellCells}
       <td class="num ${cls(r.profit||0)}">${r.profit!=null?fmt(r.profit):'-'}</td>
       <td class="num ${cls(r.ret||0)}">${r.ret!=null?pct(r.ret):'-'}</td>
