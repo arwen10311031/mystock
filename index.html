@@ -453,7 +453,8 @@
           <div class="form-row"><label>買進批次</label><select id="sellLot" style="width:auto;flex:1"></select></div>
           <div class="form-row"><label>賣出日期</label><input type="date" id="sellDate"></div>
           <div class="form-row"><label>賣價</label><input type="number" id="sellPrice" step="0.01"></div>
-          <div class="calc">手續費 0.1425% + 證交稅（股票 0.3% / ETF 0.1%）會自動計入。<br>每次只能標記整批；如果只賣部分，<span class="sub">先在 Excel 拆成兩列再 rebuild_data</span>。</div>
+          <div class="form-row"><label>賣出股數</label><input type="number" id="sellUnits" step="1"><span class="small" id="sellUnitsHint"></span></div>
+          <div class="calc">手續費 0.1425% + 證交稅（股票 0.3% / ETF 0.1%）會自動計入。<br><b>賣出股數</b>預設 = 該批次股數，可自己改大（把配股零股一起賣掉）。</div>
           <div style="margin-top:10px;display:flex;gap:8px;align-items:center">
             <button class="btn" id="submitSell">儲存賣出</button>
             <span class="small" id="sellMsg"></span>

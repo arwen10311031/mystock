@@ -260,7 +260,9 @@ function enrichLot(lot){
   const buyCost = buyAmt + buyFee;
   let result = { ...lot, buyAmt, buyFee, buyCost };
   if (lot.sell_date){
-    const sellAmt = (lot.sell_price||0) * (lot.units||0);
+    // 賣出股數：有填 sell_units 就用它（可含配股的零股），否則用買進股數
+    const sellUnits = (lot.sell_units != null && lot.sell_units > 0) ? lot.sell_units : (lot.units||0);
+    const sellAmt = (lot.sell_price||0) * sellUnits;
     const sellFee = feeOf(sellAmt);
     const sellTax = taxOf(code, sellAmt);
     const sellNet = sellAmt - sellFee - sellTax;
@@ -269,6 +271,9 @@ function enrichLot(lot){
     const days = daysBetween(lot.buy_date, lot.sell_date);
     const annual = days>0 ? Math.pow(1+ret, 365/days)-1 : 0;
     result.status='realized';
+    result.sellUnits = sellUnits;
+    // 超賣的部分（賣出股數 > 買進股數）= 配股的零股一起賣掉，記下來給 buildHoldings 扣配股
+    result.oversoldUnits = Math.max(0, sellUnits - (lot.units||0));
     Object.assign(result, {sellAmt, sellFee, sellTax, sellNet, profit, ret, days, annual});
   } else {
     const cur = STATE.prices[code];
@@ -414,7 +419,12 @@ function buildHoldings(period){
     const a = ensure(e.code, e.name);
     a.buyCostTotal += e.buyAmt;
     a.buyUnitsTotal += e.units||0;
-    if (e.status==='realized'){ a.realized += e.profit||0; a.sellLots += 1; }
+    if (e.status==='realized'){
+      a.realized += e.profit||0;
+      a.sellLots += 1;
+      // 賣出股數比買進多的部分（= 把配股零股一起賣了），記下來等下從配股持股扣掉
+      a.oversold = (a.oversold||0) + (e.oversoldUnits||0);
+    }
     else { a.units += e.units||0; a.cost += e.buyAmt; }
   }
   const today = todayISO();
@@ -429,6 +439,15 @@ function buildHoldings(period){
     a.units += sd.units||0;
     a.buyUnitsTotal += sd.units||0;
     a.stockDivUnits = (a.stockDivUnits||0) + (sd.units||0);
+  }
+  // 把「超賣的配股零股」從持股扣掉（賣出時 sell_units > 買進股數，多賣的就是配股）
+  for (const code of Object.keys(map)){
+    const a = map[code];
+    if (a.oversold > 0){
+      const cut = Math.min(a.oversold, a.units);
+      a.units -= cut;
+      a.stockDivUnits = Math.max(0, (a.stockDivUnits||0) - cut);
+    }
   }
   for (const d of dividends){
     if (period && !codeInPeriod.has(d.code)) continue;
@@ -1615,6 +1634,30 @@ function renderAddTab(){
   }
   if (curSel && heldCodes.includes(curSel)) sellStockSel.value = curSel;
 
+  // 選某批次時，把「賣出股數」預設成該批次股數；並提示該股票目前總持股（含配股零股）
+  const fillSellUnits = () => {
+    const lotId = $('#sellLot').value;
+    const code = sellStockSel.value;
+    const { lots } = buildLots();
+    const lot = lots.find(l => l._id === lotId);
+    const totalHeld = map[code] ? map[code].units : 0;
+    const stockDiv = map[code] ? (map[code].stockDivUnits||0) : 0;
+    const unitsInput = $('#sellUnits');
+    if (lotId === '__ALL__'){
+      if (unitsInput){ unitsInput.value = totalHeld; unitsInput.disabled = true; }
+    } else if (lot){
+      if (unitsInput){ unitsInput.value = lot.units; unitsInput.disabled = false; }
+    }
+    const hint = $('#sellUnitsHint');
+    if (hint){
+      if (lotId === '__ALL__'){
+        hint.textContent = `全部賣出：共 ${fmt(totalHeld)} 股${stockDiv>0?`（含配股 ${fmt(stockDiv)} 股）`:''}，所有批次都會標記賣出`;
+      } else {
+        hint.textContent = `這檔目前共持有 ${fmt(totalHeld)} 股` + (stockDiv>0 ? `（含配股 ${fmt(stockDiv)} 股）。全賣請選「★ 全部賣出」` : '');
+      }
+    }
+  };
+
   const refreshOpenLots = () => {
     const code = sellStockSel.value;
     const select = $('#sellLot');
@@ -1622,6 +1665,13 @@ function renderAddTab(){
     const { lots } = buildLots();
     const open = lots.filter(l => l.code === code && !l.sell_date);
     open.sort((a,b)=>(a.buy_date||'').localeCompare(b.buy_date||''));
+    // 第一個選項：全部賣出（所有批次 + 配股零股）
+    if (open.length > 0){
+      const oAll = document.createElement('option');
+      oAll.value = '__ALL__';
+      oAll.textContent = `★ 全部賣出（${open.length} 批 + 配股零股）`;
+      select.appendChild(oAll);
+    }
     for (const l of open){
       const o = document.createElement('option');
       o.value = l._id;
@@ -1633,8 +1683,10 @@ function renderAddTab(){
       o.value=''; o.textContent='—— 沒有可賣的批次 ——';
       select.appendChild(o);
     }
+    fillSellUnits();
   };
   sellStockSel.onchange = refreshOpenLots;
+  $('#sellLot').onchange = fillSellUnits;
   refreshOpenLots();
 
   $('#submitBuy').onclick = async () => {
@@ -1679,13 +1731,56 @@ function renderAddTab(){
     const lotId = $('#sellLot').value;
     const sd = $('#sellDate').value;
     const sp = parseFloat($('#sellPrice').value);
+    const code = sellStockSel.value;
     if (!lotId){ alert('沒有可賣的批次'); return; }
     if (!sd || !sp){ alert('請填完整：日期、賣價'); return; }
+
+    // ── 全部賣出：把該檔所有未賣買進批次都標記賣出，配股零股加到最後一批 ──
+    if (lotId === '__ALL__'){
+      const { lots } = buildLots();
+      const openLots = lots.filter(l => l.code === code && !l.sell_date)
+                           .sort((a,b)=>(a.buy_date||'').localeCompare(b.buy_date||''));
+      if (openLots.length === 0){ alert('沒有可賣的批次'); return; }
+      const stockDiv = map[code] ? (map[code].stockDivUnits||0) : 0;  // 配股零股
+      if (!confirm(`全部賣出 ${STATE.data.code_to_name[code]||code}：\n${openLots.length} 個買進批次${stockDiv>0?` + 配股 ${fmt(stockDiv)} 股`:''}\n全部以 ${sp} 賣出（日期 ${sd}）？`)) return;
+      flashMsg('#sellMsg', '⏳ 全部賣出更新中…');
+      $('#submitSell').disabled = true;
+      try {
+        for (let i = 0; i < openLots.length; i++){
+          const l = openLots[i];
+          const rec = STATE.data.records.find(r => r._id === l._id);
+          if (!rec || !rec.row_idx) continue;
+          // 配股零股加到最後一批（用 oversold 機制吸收）
+          let units = l.units;
+          if (i === openLots.length - 1) units += stockDiv;
+          await postToSheets('update', {
+            row_idx: rec.row_idx,
+            fields: { sell_date: sd, sell_price: sp, sell_units: units, sell_total: sp * units }
+          });
+        }
+        await loadFromSheets();
+        flashMsg('#sellMsg', `✔ 已全部賣出 @ ${sp}`);
+        $('#sellPrice').value='';
+        refreshOpenLots();
+        renderAll();
+      } catch (e) {
+        flashMsg('#sellMsg', `✗ 更新失敗：${e.message}`, true);
+      } finally {
+        $('#submitSell').disabled = false;
+      }
+      return;
+    }
+
+    // ── 單一批次賣出 ──
     const lot = STATE.data.records.find(r => r._id === lotId);
     if (!lot){ alert('找不到對應的買進批次'); return; }
     if (!lot.row_idx){ alert('row_idx 缺失，請先重新部署 Apps Script'); return; }
-    const sellUnits = lot.units;
-    const sellTotal = sp * sellUnits;   // 毛額；手續費 + 證交稅由前端算淨額
+    let sellUnits = parseFloat($('#sellUnits').value);
+    if (!sellUnits || sellUnits <= 0) sellUnits = lot.units;
+    if (sellUnits < lot.units){
+      if (!confirm(`賣出股數 ${fmt(sellUnits)} 小於這批的 ${fmt(lot.units)} 股。\n本系統不支援「部分賣出」（整批會被標記為已賣），確定要這樣記嗎？\n建議：全賣請選「★ 全部賣出」。`)) return;
+    }
+    const sellTotal = sp * sellUnits;
     flashMsg('#sellMsg', '⏳ 更新 Sheets…');
     $('#submitSell').disabled = true;
     try {
