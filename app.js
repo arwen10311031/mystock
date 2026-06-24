@@ -54,7 +54,7 @@ function fmtLotsParts(units){
 }
 
 // ---------- 版號（改前端就 +1，方便比對線上是不是最新）----------
-const APP_VERSION = 'fe-2026-06-09-03';
+const APP_VERSION = 'fe-2026-06-09-04';
 
 // ---------- 全域 state ----------
 // Apps Script URL 寫死，不再讀 localStorage（避免不同裝置漏設）

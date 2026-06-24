@@ -421,10 +421,9 @@
             <select id="buyWho"><option value="我">我</option><option value="Max">Max</option></select>
           </div>
           <div class="form-row"><label>日期</label><input type="date" id="buyDate"></div>
-          <div class="form-row"><label>股票</label><select id="buyStock" style="width:auto;flex:1"></select></div>
-          <div class="form-row" style="margin-top:-2px;margin-bottom:6px">
-            <label></label>
-            <button type="button" class="iconbtn" id="toggleAddStock" style="font-size:11px;padding:3px 8px">➕ 找不到？新增其他標的</button>
+          <div class="form-row"><label>股票</label>
+            <select id="buyStock" style="width:auto;flex:1"></select>
+            <button type="button" class="btn" id="toggleAddStock" style="white-space:nowrap;background:var(--green);color:#06281a">➕ 新標的</button>
           </div>
           <div id="addStockBox" hidden style="margin:0 0 10px;padding:10px;background:#0e1620;border-radius:6px;border:1px dashed var(--line)">
             <div class="form-row"><label style="min-width:60px">代碼</label><input type="text" id="newStockCode" placeholder="例：3231" style="width:auto;flex:1"></div>
