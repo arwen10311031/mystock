@@ -14,7 +14,7 @@
 
 const SHEET_NAME = '股票';
 // 版號：改 GAS 就 +1，會回傳在 doRead 的 JSON，方便比對線上是不是最新
-const GAS_VERSION = 'gas-2026-06-09-01';
+const GAS_VERSION = 'gas-2026-06-09-02';
 
 function doGet(e) {
   const action = (e && e.parameter && e.parameter.action) || 'read';
@@ -111,14 +111,24 @@ function doUpdateRow(body) {
     sell_date: 9, sell_price: 10, sell_units: 11, sell_total: 12,
     dividend: 13, ex_date: 14
   };
+  // 這些欄位要用文字格式寫（日期、代碼），避免被 Sheets 當成日期序號/數字重新解讀
+  const textCols = { buy_date: true, sell_date: true, ex_date: true, code: true };
   const updated = {};
   for (const key in fields) {
     const col = colMap[key];
     if (!col) continue;
     const v = fields[key];
-    sheet.getRange(rowIdx, col).setValue(v == null ? '' : v);
+    const cell = sheet.getRange(rowIdx, col);
+    if (textCols[key]) {
+      cell.setNumberFormat('@');
+      SpreadsheetApp.flush();
+      cell.setValue(v == null ? '' : String(v));
+    } else {
+      cell.setValue(v == null ? '' : v);
+    }
     updated[key] = v;
   }
+  SpreadsheetApp.flush();
   return jsonOut({ ok: true, action: 'update', row_idx: rowIdx, updated: updated });
 }
 
