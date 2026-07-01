@@ -54,7 +54,7 @@ function fmtLotsParts(units){
 }
 
 // ---------- 版號（改前端就 +1，方便比對線上是不是最新）----------
-const APP_VERSION = 'fe-2026-06-09-04';
+const APP_VERSION = 'fe-2026-06-09-05';
 
 // ---------- 全域 state ----------
 // Apps Script URL 寫死，不再讀 localStorage（避免不同裝置漏設）
@@ -1074,20 +1074,22 @@ function renderTrades(){
 
 // ---------- 配息 ----------
 function renderDividends(){
-  const { dividends } = buildLots();
+  const { dividends, stockDivs } = buildLots();
+  // 配息 + 配股 都納入（配股標記 isStockDiv）
+  const allRecs = dividends.concat(stockDivs.map(s => ({...s, isStockDiv:true})));
   if ($('#divStock').options.length<=1){
-    const codes = [...new Set(dividends.map(l=>l.code))].sort();
+    const codes = [...new Set(allRecs.map(l=>l.code))].sort();
     for (const c of codes){
       const o = document.createElement('option');
       o.value = c; o.textContent = `${c} ${STATE.data.code_to_name[c]||''}`;
       $('#divStock').appendChild(o);
     }
-    const years = [...new Set(dividends.map(l=>(l.buy_date||'').slice(0,4)).filter(Boolean))].sort();
+    const years = [...new Set(allRecs.map(l=>(l.buy_date||'').slice(0,4)).filter(Boolean))].sort();
     for (const y of years){ const o=document.createElement('option'); o.value=y; o.textContent=y; $('#divYear').appendChild(o); }
   }
   const today = todayISO();
   const codeF = $('#divStock').value, yrF = $('#divYear').value, kindF = $('#divKind').value;
-  let rows = dividends.slice();
+  let rows = allRecs.slice();
   if (codeF) rows = rows.filter(r=>r.code===codeF);
   if (yrF) rows = rows.filter(r=>(r.buy_date||'').startsWith(yrF));
   rows = rows.map(r => ({...r, kind: r.buy_date<=today?'actual':'forecast'}));
@@ -1101,20 +1103,35 @@ function renderDividends(){
     const ym = (r.buy_date||'').slice(0,7);
     if (ym !== prevMonth){ bandIdx++; prevMonth = ym; }
     const bandClass = bandIdx % 2 === 0 ? 'month-band' : '';
-    const a = adjustedDividend(r) || 0;
-    if (r.kind==='actual') sumA+=a; else sumF+=a;
     const isUser = r._id && r._id.startsWith('user-');
     const tr = document.createElement('tr');
     if (bandClass) tr.classList.add(bandClass);
     if (STATE._flashId === r._id) tr.classList.add('flash-saved');
-    tr.innerHTML = `
-      <td>${r.kind==='actual'?'<span class="pill realized">已發</span>':'<span class="pill held">預估</span>'}${isUser?'<span class="badge etf" style="margin-left:4px">新</span>':''}</td>
-      <td><input type="date" class="inline-date" data-act="ex-date" data-id="${r._id}" value="${divExDate(r)||''}"></td>
-      <td><input type="date" class="inline-date sub" data-act="pay-date" data-id="${r._id}" value="${r.buy_date||''}"></td>
-      <td>${r.name} <span class="sub">${r.code}</span></td>
-      <td class="num">${fmt2(r.buy_price)}</td>
-      <td class="num">${fmt(adjustedDividend(r))}${(r.kind==='forecast' && (!STATE.overrides[r._id] || STATE.overrides[r._id].dividend==null))?'<span class="badge etf" style="margin-left:4px" title="依除息日當下持股自動推估">自動</span>':''}</td>
-      <td><button class="iconbtn" data-act="edit-div" data-id="${r._id}" title="編輯金額">✏️</button>${isUser?` <button class="iconbtn" data-act="del-user" data-id="${r._id}">刪</button>`:(STATE.overrides[r._id]?` <button class="iconbtn" data-act="reset-div" data-id="${r._id}" title="還原">↺</button>`:'')}</td>`;
+
+    if (r.isStockDiv){
+      // ── 配股列 ──
+      const typeBadge = `<span class="pill" style="background:#2a3a2a;color:#a8e7a8">配股</span>`;
+      tr.innerHTML = `
+        <td>${typeBadge}${isUser?'<span class="badge etf" style="margin-left:4px">新</span>':''}</td>
+        <td><input type="date" class="inline-date" data-act="sd-ex-date" data-id="${r._id}" value="${r.ex_date||''}" title="除權日"></td>
+        <td><input type="date" class="inline-date sub" data-act="sd-pay-date" data-id="${r._id}" value="${r.buy_date||''}" title="入帳日"></td>
+        <td>${r.name} <span class="sub">${r.code}</span> <span class="badge etf">🎁</span></td>
+        <td class="num">${fmt2(r.buy_price)} <span class="sub">配股率</span></td>
+        <td class="num">${fmt(r.units)} <span class="sub">股</span></td>
+        <td></td>`;
+    } else {
+      // ── 配息列 ──
+      const a = adjustedDividend(r) || 0;
+      if (r.kind==='actual') sumA+=a; else sumF+=a;
+      tr.innerHTML = `
+        <td>${r.kind==='actual'?'<span class="pill realized">已發</span>':'<span class="pill held">預估</span>'}${isUser?'<span class="badge etf" style="margin-left:4px">新</span>':''}</td>
+        <td><input type="date" class="inline-date" data-act="ex-date" data-id="${r._id}" value="${divExDate(r)||''}"></td>
+        <td><input type="date" class="inline-date sub" data-act="pay-date" data-id="${r._id}" value="${r.buy_date||''}"></td>
+        <td>${r.name} <span class="sub">${r.code}</span></td>
+        <td class="num">${fmt2(r.buy_price)}</td>
+        <td class="num">${fmt(adjustedDividend(r))}${(r.kind==='forecast' && (!STATE.overrides[r._id] || STATE.overrides[r._id].dividend==null))?'<span class="badge etf" style="margin-left:4px" title="依除息日當下持股自動推估">自動</span>':''}</td>
+        <td><button class="iconbtn" data-act="edit-div" data-id="${r._id}" title="編輯金額">✏️</button>${isUser?` <button class="iconbtn" data-act="del-user" data-id="${r._id}">刪</button>`:''}</td>`;
+    }
     tb.appendChild(tr);
   }
   $('#divSummary').textContent = `已收 ${fmt(sumA)}　預估 ${fmt(sumF)}　筆數 ${rows.length}`;
@@ -1126,8 +1143,12 @@ function renderDividends(){
   $$('#tblDiv [data-act="pay-date"]').forEach(inp => {
     inp.onchange = e => updateDivDate(e.target.dataset.id, 'buy_date', e.target.value);
   });
-  $$('#tblDiv [data-act="reset-div"]').forEach(b => b.onclick = () => {
-    alert('「還原為原始資料」已停用。\n若要修改請直接在 Google Sheets 改完，再按設定分頁的「重新從 Sheets 載入」。');
+  // 配股的除權日 / 入帳日（同樣寫回 Sheets）
+  $$('#tblDiv [data-act="sd-ex-date"]').forEach(inp => {
+    inp.onchange = e => updateDivDate(e.target.dataset.id, 'ex_date', e.target.value);
+  });
+  $$('#tblDiv [data-act="sd-pay-date"]').forEach(inp => {
+    inp.onchange = e => updateDivDate(e.target.dataset.id, 'buy_date', e.target.value);
   });
 }
 
