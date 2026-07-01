@@ -54,7 +54,7 @@ function fmtLotsParts(units){
 }
 
 // ---------- 版號（改前端就 +1，方便比對線上是不是最新）----------
-const APP_VERSION = 'fe-2026-06-09-05';
+const APP_VERSION = 'fe-2026-06-09-06';
 
 // ---------- 全域 state ----------
 // Apps Script URL 寫死，不再讀 localStorage（避免不同裝置漏設）
@@ -1180,16 +1180,21 @@ async function editDividend(id){
   const ps = parseFloat(psStr);
   if (isNaN(ps) || ps < 0){ alert('每股配息格式錯誤'); return; }
   const exDateStr = prompt('除息日（影響推估持股，可留空 = 入帳日 −30 天）：', divExDate(r));
-  const exDateNew = exDateStr === null ? divExDate(r) : (exDateStr.trim() || null);
-  const exDate = divExDate(r);
+  if (exDateStr === null) return;
+  const exDateNew = exDateStr.trim() || null;
+  // 入帳日（buy_date）也開放編輯
+  const payStr = prompt('入帳日（YYYY-MM-DD，用於月配息統計）：', r.buy_date || '');
+  if (payStr === null) return;
+  const payNew = payStr.trim() || r.buy_date;
+  const exDate = exDateNew || divExDate(r);
   const heldUnits = holdingsAtDate(r.code, exDate);
   const suggested = heldUnits > 0 ? Math.round(heldUnits * ps) : (r.dividend || '');
-  const totalStr = prompt(`配息總金額（建議 ${suggested.toLocaleString()}，依除息日 ${r.buy_date} 當時持有 ${heldUnits} 股 × ${ps}）：`, suggested);
+  const totalStr = prompt(`配息總金額（建議 ${suggested.toLocaleString()}，依除息日當時持有 ${heldUnits} 股 × ${ps}）：`, suggested);
   if (totalStr === null) return;
   const total = parseFloat(totalStr);
   if (isNaN(total) || total < 0){ alert('配息金額格式錯誤'); return; }
   try {
-    await updateSheetRow(id, { buy_price: ps, dividend: total, ex_date: exDateNew || '' });
+    await updateSheetRow(id, { buy_price: ps, dividend: total, ex_date: exDateNew || '', buy_date: payNew });
     await loadFromSheets();
     renderAll();
   } catch (e) {
