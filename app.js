@@ -54,7 +54,7 @@ function fmtLotsParts(units){
 }
 
 // ---------- 版號（改前端就 +1，方便比對線上是不是最新）----------
-const APP_VERSION = 'fe-2026-06-09-06';
+const APP_VERSION = 'fe-2026-11-11-01';
 
 // ---------- 全域 state ----------
 // Apps Script URL 寫死，不再讀 localStorage（避免不同裝置漏設）
@@ -1900,6 +1900,12 @@ function renderAddTab(){
     if (!lot.row_idx){ alert('row_idx 缺失，請先重新部署 Apps Script'); return; }
     let sellUnits = parseFloat($('#sellUnits').value);
     if (!sellUnits || sellUnits <= 0) sellUnits = lot.units;
+    // 防呆：賣出單位不能超過該股票目前總持股（含配股零股）
+    const totalHeld = map[code] ? map[code].units : lot.units;
+    if (sellUnits > totalHeld){
+      alert(`賣出股數 ${fmt(sellUnits)} 超過目前總持股 ${fmt(totalHeld)} 股，已擋下。\n請改成正確的股數（這批是 ${fmt(lot.units)} 股；要連配股一起賣，全賣請選「★ 全部賣出」）。`);
+      return;
+    }
     if (sellUnits < lot.units){
       if (!confirm(`賣出股數 ${fmt(sellUnits)} 小於這批的 ${fmt(lot.units)} 股。\n本系統不支援「部分賣出」（整批會被標記為已賣），確定要這樣記嗎？\n建議：全賣請選「★ 全部賣出」。`)) return;
     }
